@@ -178,14 +178,19 @@ app.get('/v1', (c) => {
   })
 })
 
+// Global logger to see every single hit to the server
+app.use('*', async (c, next) => {
+  console.log(`🌐 [CONNECTION] ${c.req.method} ${c.req.path}`)
+  await next()
+})
+
 app.get('/v1/models', async (c: Context) => {
   const fallbackModels: ModelInfo[] = [
-    { id: 'claude-3-5-sonnet-20241022', object: 'model', created: 1729555200, owned_by: 'anthropic' },
-    { id: 'claude-3-5-haiku-20241022', object: 'model', created: 1729555200, owned_by: 'anthropic' },
-    { id: 'claude-3-opus-20240229', object: 'model', created: 1709164800, owned_by: 'anthropic' },
-    { id: 'claude-3-sonnet-20240229', object: 'model', created: 1709164800, owned_by: 'anthropic' },
-    { id: 'claude-3-haiku-20240307', object: 'model', created: 1709769600, owned_by: 'anthropic' },
-    { id: 'gpt-4o', object: 'model', created: 1715558400, owned_by: 'openai' },
+    // Claude Models
+    { id: 'claude-4.5-sonnet', object: 'model', created: 1730000000, owned_by: 'anthropic' },
+
+    // Cursor/Composer Models (Catch-all to keep proxy active)
+    { id: 'composer-1', object: 'model', created: 1730000000, owned_by: 'cursor' },
   ]
 
   try {
@@ -246,31 +251,68 @@ app.get('/v1/models', async (c: Context) => {
   }
 })
 
+const mapModelAlias = (model: string): string => {
+  const mapping: Record<string, string> = {
+    // Cursor Naming -> Anthropic API ID
+    'claude-4.5-sonnet': 'claude-sonnet-4-5',
+    'claude-4.5-opus': 'claude-opus-4-5',
+  }
+
+  return mapping[model] || model
+}
+
 const messagesFn = async (c: Context) => {
   let headers: Record<string, string> = c.req.header() as Record<string, string>
   headers.host = 'api.anthropic.com'
   const body: AnthropicRequestBody = await c.req.json()
 
+  // Map model alias
+  const originalModel = body.model;
+  body.model = mapModelAlias(body.model);
+
   const isStreaming = body.stream === true
 
   console.log(`\n📥 [REQUEST] ${c.req.method} ${c.req.path}`)
-  console.log(`🤖 Model: ${body.model}`)
+  console.log(`🤖 Model: ${originalModel}${originalModel !== body.model ? ` -> ${body.model}` : ''}`)
   console.log(`📡 Streaming: ${isStreaming}`)
 
   const apiKey = c.req.header('authorization')?.split(' ')?.[1]
 
-  // Only enforce API_KEY if it is defined in .env
-  if (process.env.API_KEY && apiKey && apiKey !== 'undefined' && apiKey !== 'null' && apiKey !== '') {
-    if (apiKey !== process.env.API_KEY) {
-      console.log('❌ Invalid API Key provided in request')
-      return c.json(
-        {
-          error: 'Authentication required',
-          message: 'The provided API key does not match the API_KEY in your .env file.',
-        },
-        401,
-      )
+  // Accept any key starting with 'sk-' or 'dummy' or the actual API_KEY
+  // This allows the user to put a "dummy" key in Cursor to keep the override active
+  // without breaking Cursor's own model routing logic.
+  if (process.env.API_KEY && apiKey) {
+    const isAcceptedKey = apiKey === process.env.API_KEY ||
+      apiKey.startsWith('sk-') ||
+      apiKey.includes('proxy') ||
+      apiKey === 'dummy'
+
+    if (!isAcceptedKey) {
+      console.log(`⚠️ Warning: Non-standard Key mismatch (Received: ${apiKey.substring(0, 8)}...), but proceeding to OAuth check.`)
     }
+  }
+
+  // Selective Gateway: Only handle Claude models.
+  // If Cursor sends a non-Claude model (like gpt-4o or deepseek) to this proxy,
+  // we return a 404 to force Cursor to try its next available provider (usually Cursor Cloud).
+  const isClaudeModel = body.model.toLowerCase().includes('claude') ||
+    body.model.toLowerCase().includes('sonnet') ||
+    body.model.toLowerCase().includes('opus') ||
+    body.model.toLowerCase().includes('haiku')
+
+  if (!isClaudeModel && !isCursorKeyCheck(body)) {
+    console.log(`🚫 [SELECTIVE 404] Model ${body.model} not handled by proxy. Forcing Cursor internal fallback.`)
+    return c.json(
+      {
+        error: {
+          message: `The model ${body.model} is not supported by this Claude Proxy. Requesting fallback to Cursor Pro servers.`,
+          type: 'invalid_request_error',
+          param: 'model',
+          code: 'model_not_supported_by_proxy'
+        }
+      },
+      404
+    )
   }
 
   // Bypass cursor enable openai key check
