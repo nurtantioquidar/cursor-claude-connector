@@ -139,6 +139,7 @@ interface ProcessResult {
 export interface ConverterState {
   toolCallsTracker: Map<number, ToolCallTracker>
   metricsData: MetricsData
+  lineBuffer: string
 }
 
 // Create initial converter state
@@ -155,6 +156,7 @@ export function createConverterState(): ConverterState {
       messageId: null,
       openAIId: null,
     },
+    lineBuffer: '',
   }
 }
 
@@ -181,8 +183,8 @@ export function convertNonStreamingResponse(
           anthropicResponse.stop_reason === 'end_turn'
             ? 'stop'
             : anthropicResponse.stop_reason === 'tool_use'
-            ? 'tool_calls'
-            : anthropicResponse.stop_reason || null,
+              ? 'tool_calls'
+              : anthropicResponse.stop_reason || null,
       },
     ],
     usage: {
@@ -226,7 +228,21 @@ export function processChunk(
   enableLogging: boolean = false,
 ): ProcessResult[] {
   const results: ProcessResult[] = []
-  const lines = chunk.split('\n')
+
+  // Combine with pending data from previous chunk
+  const fullContent = state.lineBuffer + chunk
+  state.lineBuffer = '' // Clear buffer after combining
+
+  const lines = fullContent.split('\n')
+
+  // If the last line doesn't end with a newline, it's incomplete
+  // Buffer it for the next chunk
+  if (!fullContent.endsWith('\n')) {
+    const lastLine = lines.pop()
+    if (lastLine !== undefined) {
+      state.lineBuffer = lastLine
+    }
+  }
 
   for (const line of lines) {
     const trimmedLine = line.trim()
@@ -549,8 +565,8 @@ function transformToOpenAI(
             data.delta.stop_reason === 'end_turn'
               ? 'stop'
               : data.delta.stop_reason === 'tool_use'
-              ? 'tool_calls'
-              : data.delta.stop_reason,
+                ? 'tool_calls'
+                : data.delta.stop_reason,
         },
       ],
     }

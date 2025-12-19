@@ -28,7 +28,9 @@
   "author": "Maol-1997",
   "license": "MIT",
   "dependencies": {
+    "@hono/node-server": "^1.19.7",
     "@upstash/redis": "^1.35.1",
+    "dotenv": "^17.2.3",
     "hono": "^4.8.3"
   },
   "devDependencies": {

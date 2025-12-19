@@ -1,15 +1,4 @@
-import { Redis } from '@upstash/redis'
-
-interface OAuthCredentials {
-  type: 'oauth'
-  refresh: string
-  access: string
-  expires: number
-}
-
-interface AuthData {
-  [provider: string]: OAuthCredentials
-}
+import { getStorage, OAuthCredentials, AuthData } from './storage'
 
 interface TokenResponse {
   access_token: string
@@ -17,54 +6,46 @@ interface TokenResponse {
   expires_in: number
 }
 
-// Initialize Redis client
-const redis = new Redis({
-  url: process.env.UPSTASH_REDIS_REST_URL || '',
-  token: process.env.UPSTASH_REDIS_REST_TOKEN || '',
-})
+// Initialize Storage (Redis or File fallback)
+const storage = getStorage()
 
-// Redis key for auth data
+// Storage key for auth data
 const AUTH_KEY = 'auth:anthropic'
 
 async function get(): Promise<OAuthCredentials | null> {
   try {
-    const data = await redis.get<OAuthCredentials>(AUTH_KEY)
-    return data
+    return await storage.get(AUTH_KEY)
   } catch (error) {
-    console.error('Error getting auth from Redis:', error)
+    console.error('Error getting auth from storage:', error)
     return null
   }
 }
 
 async function set(credentials: OAuthCredentials): Promise<boolean> {
   try {
-    await redis.set(AUTH_KEY, credentials)
+    await storage.set(AUTH_KEY, credentials)
     return true
   } catch (error) {
-    console.error('Error saving auth to Redis:', error)
+    console.error('Error saving auth to storage:', error)
     throw error
   }
 }
 
 async function remove(): Promise<boolean> {
   try {
-    await redis.del(AUTH_KEY)
+    await storage.remove(AUTH_KEY)
     return true
   } catch (error) {
-    console.error('Error removing auth from Redis:', error)
+    console.error('Error removing auth from storage:', error)
     throw error
   }
 }
 
 async function getAll(): Promise<AuthData> {
   try {
-    const credentials = await redis.get<OAuthCredentials>(AUTH_KEY)
-    if (credentials) {
-      return { anthropic: credentials }
-    }
-    return {}
+    return await storage.getAll(AUTH_KEY)
   } catch (error) {
-    console.error('Error getting all auth from Redis:', error)
+    console.error('Error getting all auth from storage:', error)
     return {}
   }
 }
