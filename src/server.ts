@@ -254,8 +254,7 @@ app.get('/v1/models', async (c: Context) => {
 const mapModelAlias = (model: string): string => {
   const mapping: Record<string, string> = {
     // Cursor Naming -> Anthropic API ID
-    'claude-4.5-sonnet': 'claude-sonnet-4-5',
-    'claude-4.5-opus': 'claude-opus-4-5',
+    'claude-4.5-opus-high-thinking': 'claude-opus-4-5',
   }
 
   return mapping[model] || model
@@ -281,15 +280,25 @@ const messagesFn = async (c: Context) => {
   // Accept any key starting with 'sk-' or 'dummy' or the actual API_KEY
   // This allows the user to put a "dummy" key in Cursor to keep the override active
   // without breaking Cursor's own model routing logic.
-  if (process.env.API_KEY && apiKey) {
-    const isAcceptedKey = apiKey === process.env.API_KEY ||
-      apiKey.startsWith('sk-') ||
-      apiKey.includes('proxy') ||
-      apiKey === 'dummy'
+  // if (process.env.API_KEY && apiKey) {
+  //   const isAcceptedKey = apiKey === process.env.API_KEY ||
+  //     apiKey.startsWith('sk-') ||
+  //     apiKey.includes('proxy') ||
+  //     apiKey === 'dummy'
 
-    if (!isAcceptedKey) {
-      console.log(`⚠️ Warning: Non-standard Key mismatch (Received: ${apiKey.substring(0, 8)}...), but proceeding to OAuth check.`)
-    }
+  //   if (!isAcceptedKey) {
+  //     console.log(`⚠️ Warning: Non-standard Key mismatch (Received: ${apiKey.substring(0, 8)}...), but proceeding to OAuth check.`)
+  //   }
+  // }
+
+  if (apiKey && apiKey !== process.env.API_KEY) {
+    return c.json(
+      {
+        error: 'Authentication required',
+        message: 'Please authenticate use the API key from the .env file',
+      },
+      401,
+    )
   }
 
   // Selective Gateway: Only handle Claude models.
