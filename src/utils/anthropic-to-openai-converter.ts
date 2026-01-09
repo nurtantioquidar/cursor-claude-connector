@@ -165,14 +165,17 @@ export interface ConverterState {
   thinkingBlock: ThinkingBlockData | null
   accumulatedText: string
   inThinkingBlock: boolean
+  // Original model name from request (for Cursor context tracking)
+  originalModel: string | null
 }
 
 // Create initial converter state
-export function createConverterState(): ConverterState {
+// originalModel: Pass the original model name from Cursor's request to preserve context tracking
+export function createConverterState(originalModel?: string): ConverterState {
   return {
     toolCallsTracker: new Map(),
     metricsData: {
-      model: '',
+      model: originalModel || '',
       stop_reason: null,
       input_tokens: 0,
       cache_creation_input_tokens: 0,
@@ -185,6 +188,7 @@ export function createConverterState(): ConverterState {
     thinkingBlock: null,
     accumulatedText: '',
     inThinkingBlock: false,
+    originalModel: originalModel || null,
   }
 }
 
@@ -253,8 +257,10 @@ export function getUsageFromState(state: ConverterState): {
 
 // Convert non-streaming response to OpenAI format (stateless)
 // Includes prompt_tokens_details.cached_tokens for Cursor's context panel integration
+// originalModel: Pass the original model name from Cursor's request to preserve context tracking
 export function convertNonStreamingResponse(
   anthropicResponse: AnthropicResponse | AnthropicFullResponse,
+  originalModel?: string,
 ): OpenAIResponse {
   // Map Anthropic cache tokens to OpenAI format for Cursor integration
   const cachedTokens = anthropicResponse.usage?.cache_read_input_tokens || 0
@@ -265,7 +271,8 @@ export function convertNonStreamingResponse(
       (anthropicResponse.id || Date.now()).toString().replace('msg_', ''),
     object: 'chat.completion' as const,
     created: Math.floor(Date.now() / 1000),
-    model: anthropicResponse.model || 'claude-unknown',
+    // Use original model name from request for Cursor's context window calculation
+    model: originalModel || anthropicResponse.model || 'claude-unknown',
     choices: [
       {
         index: 0,
@@ -552,7 +559,7 @@ function createUsageChunk(state: ConverterState): OpenAIStreamChunk | null {
     id: state.metricsData.openAIId || 'chatcmpl-' + Date.now(),
     object: 'chat.completion.chunk' as const,
     created: Math.floor(Date.now() / 1000),
-    model: state.metricsData.model || 'claude-unknown',
+    model: state.originalModel || state.metricsData.model || 'claude-unknown',
     choices: [
       {
         index: 0,
@@ -576,12 +583,18 @@ function transformToOpenAI(
     // Generate OpenAI-style ID
     const openAIId = 'chatcmpl-' + data.message.id.replace('msg_', '')
     state.metricsData.openAIId = openAIId
+    
+    // Store Anthropic's model but prefer original model for responses (for Cursor context tracking)
+    if (!state.originalModel) {
+      state.metricsData.model = data.message.model
+    }
 
     openAIChunk = {
       id: openAIId,
       object: 'chat.completion.chunk' as const,
       created: Math.floor(Date.now() / 1000),
-      model: data.message.model,
+      // Use original model name from request for Cursor's context window calculation
+      model: state.originalModel || data.message.model,
       choices: [
         {
           index: 0,
@@ -614,7 +627,7 @@ function transformToOpenAI(
       id: state.metricsData.openAIId || 'chatcmpl-' + Date.now(),
       object: 'chat.completion.chunk' as const,
       created: Math.floor(Date.now() / 1000),
-      model: state.metricsData.model || 'claude-unknown',
+      model: state.originalModel || state.metricsData.model || 'claude-unknown',
       choices: [
         {
           index: 0,
@@ -683,7 +696,7 @@ function transformToOpenAI(
         id: state.metricsData.openAIId || 'chatcmpl-' + Date.now(),
         object: 'chat.completion.chunk' as const,
         created: Math.floor(Date.now() / 1000),
-        model: state.metricsData.model || 'claude-unknown',
+        model: state.originalModel || state.metricsData.model || 'claude-unknown',
         choices: [
           {
             index: 0,
@@ -717,7 +730,7 @@ function transformToOpenAI(
       id: state.metricsData.openAIId || 'chatcmpl-' + Date.now(),
       object: 'chat.completion.chunk' as const,
       created: Math.floor(Date.now() / 1000),
-      model: state.metricsData.model || 'claude-unknown',
+      model: state.originalModel || state.metricsData.model || 'claude-unknown',
       choices: [
         {
           index: 0,
@@ -731,7 +744,7 @@ function transformToOpenAI(
       id: state.metricsData.openAIId || 'chatcmpl-' + Date.now(),
       object: 'chat.completion.chunk' as const,
       created: Math.floor(Date.now() / 1000),
-      model: state.metricsData.model || 'claude-unknown',
+      model: state.originalModel || state.metricsData.model || 'claude-unknown',
       choices: [
         {
           index: 0,

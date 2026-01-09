@@ -635,7 +635,8 @@ const messagesFn = async (c: Context) => {
       const decoder = new TextDecoder()
 
       return stream(c, async (stream) => {
-        const converterState = createConverterState()
+        // Pass original model name for Cursor's context window tracking
+        const converterState = createConverterState(originalModel)
         const enableLogging = false
 
         try {
@@ -700,7 +701,8 @@ const messagesFn = async (c: Context) => {
       }
 
       if (transformToOpenAIFormat) {
-        const openAIResponse = convertNonStreamingResponse(responseData)
+        // Pass original model name for Cursor's context window tracking
+        const openAIResponse = convertNonStreamingResponse(responseData, originalModel)
 
         response.headers.forEach((value, key) => {
           if (key.toLowerCase() !== 'content-encoding') {
