@@ -247,15 +247,30 @@ export async function getCachedThinkingBlock(
 }
 
 /**
+ * Result of injecting cached thinking blocks
+ */
+export interface InjectResult {
+  injectedCount: number
+  missingCount: number
+  canUseThinking: boolean
+}
+
+/**
  * Inject cached thinking blocks into conversation messages.
  * Modifies the messages array in place.
- * Returns the number of thinking blocks injected.
+ * 
+ * Returns info about injection results including whether thinking can be enabled.
+ * When thinking is enabled, ALL assistant messages must have thinking blocks.
+ * If any are missing, thinking must be disabled for the request.
  */
-export async function injectCachedThinkingBlocks(messages: AnthropicMessage[]): Promise<number> {
+export async function injectCachedThinkingBlocks(messages: AnthropicMessage[]): Promise<InjectResult> {
   let injectedCount = 0
+  let missingCount = 0
+  let totalAssistantMessages = 0
 
   for (const msg of messages) {
     if (msg.role !== 'assistant') continue
+    totalAssistantMessages++
 
     // Check if this message already has a thinking block
     if (Array.isArray(msg.content)) {
@@ -273,6 +288,8 @@ export async function injectCachedThinkingBlocks(messages: AnthropicMessage[]): 
         // Inject at the beginning (thinking must come first)
         msg.content = [cachedThinking, ...msg.content]
         injectedCount++
+      } else {
+        missingCount++
       }
     } else if (typeof msg.content === 'string') {
       // String content - try to find cached thinking block
@@ -281,6 +298,8 @@ export async function injectCachedThinkingBlocks(messages: AnthropicMessage[]): 
         // Convert to array with thinking block first
         msg.content = [cachedThinking, { type: 'text' as const, text: msg.content }]
         injectedCount++
+      } else {
+        missingCount++
       }
     }
   }
@@ -288,8 +307,19 @@ export async function injectCachedThinkingBlocks(messages: AnthropicMessage[]): 
   if (injectedCount > 0) {
     console.log(`[ThinkingCache] Injected ${injectedCount} cached thinking block(s)`)
   }
+  if (missingCount > 0) {
+    console.log(`[ThinkingCache] Missing ${missingCount} thinking block(s) - thinking will be disabled`)
+  }
 
-  return injectedCount
+  // Thinking can only be used if we have ALL thinking blocks
+  // (or if there are no prior assistant messages)
+  const canUseThinking = missingCount === 0
+
+  return {
+    injectedCount,
+    missingCount,
+    canUseThinking,
+  }
 }
 
 /**

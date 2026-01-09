@@ -24,6 +24,7 @@ import {
   isRedisAvailable,
   type ContentBlock,
   type AnthropicMessage,
+  type InjectResult,
 } from './utils/thinking-cache'
 import { corsPreflightHandler, corsMiddleware } from './utils/cors-bypass'
 import {
@@ -528,15 +529,33 @@ const messagesFn = async (c: Context) => {
     }
 
     // Try to inject cached thinking blocks for multi-turn conversations
+    let thinkingEnabled = !!variant.thinking
     if (anthropicBody.messages && anthropicBody.messages.length > 0) {
       const messagesWithThinking = anthropicBody.messages as AnthropicMessage[]
-      const injectedCount = await injectCachedThinkingBlocks(messagesWithThinking)
-      if (injectedCount > 0) {
-        console.log(`🧠 [THINKING] Injected ${injectedCount} cached thinking block(s)`)
+      const injectResult: InjectResult = await injectCachedThinkingBlocks(messagesWithThinking)
+      
+      if (injectResult.injectedCount > 0) {
+        console.log(`🧠 [THINKING] Injected ${injectResult.injectedCount} cached thinking block(s)`)
+      }
+      
+      // If we couldn't restore all thinking blocks, we must disable thinking
+      // Anthropic requires ALL assistant messages to have thinking blocks when thinking is enabled
+      if (variant.thinking && !injectResult.canUseThinking) {
+        console.log(`⚠️ [THINKING] Disabling thinking - missing ${injectResult.missingCount} cached block(s)`)
+        delete anthropicBody.thinking
+        anthropicBody.temperature = body.temperature // Restore original temperature
+        thinkingEnabled = false
+        
+        // Remove interleaved-thinking from beta headers
+        const currentBeta = headers['anthropic-beta'] || ''
+        headers['anthropic-beta'] = currentBeta
+          .split(',')
+          .filter((h: string) => !h.includes('interleaved-thinking'))
+          .join(',')
       }
     }
 
-    console.log(`📤 [FORWARD] Sending to Anthropic: ${anthropicBody.model}`)
+    console.log(`📤 [FORWARD] Sending to Anthropic: ${anthropicBody.model}${thinkingEnabled ? ' (thinking enabled)' : ''}`)
 
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
