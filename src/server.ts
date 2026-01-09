@@ -273,42 +273,65 @@ interface ModelVariantConfig {
   thinking: { type: 'enabled'; budget_tokens: number } | null
 }
 
+// Thinking configuration for models
+const THINKING_CONFIG = { type: 'enabled' as const, budget_tokens: 32000 }
+
 const MODEL_VARIANTS: Record<string, ModelVariantConfig> = {
-  // Opus variants
+  // Opus variants - all patterns Cursor might send
   'claude-4.5-opus-high-thinking': {
     model: 'claude-opus-4-5',
     maxTokens: 64000,
-    thinking: { type: 'enabled', budget_tokens: 32000 },
+    thinking: THINKING_CONFIG,
   },
-  // Sonnet variants
+  'claude-4.5-opus-high': {
+    model: 'claude-opus-4-5',
+    maxTokens: 64000,
+    thinking: null,
+  },
+  // Sonnet variants - all patterns Cursor might send
   'claude-4.5-sonnet-high-thinking': {
     model: 'claude-sonnet-4-5',
     maxTokens: 64000,
-    thinking: { type: 'enabled', budget_tokens: 32000 },
+    thinking: THINKING_CONFIG,
+  },
+  'claude-4.5-sonnet-high': {
+    model: 'claude-sonnet-4-5',
+    maxTokens: 64000,
+    thinking: null,
   },
 }
 
 const resolveModelVariant = (model: string): ModelVariantConfig & { originalModel: string } => {
-  // Check if it's a known Cursor variant
-  if (MODEL_VARIANTS[model]) {
-    return { ...MODEL_VARIANTS[model], originalModel: model }
+  const normalizedModel = model.toLowerCase().trim()
+  
+  // Check if it's a known Cursor variant (case-insensitive)
+  for (const [key, config] of Object.entries(MODEL_VARIANTS)) {
+    if (key.toLowerCase() === normalizedModel) {
+      return { ...config, originalModel: model }
+    }
   }
 
-  // Handle legacy format: claude-4.5-{model}-{budget}[-thinking]
-  const legacyMatch = model.match(/^claude-4\.5-(opus|sonnet|haiku)(?:-(high|medium|low))?(-thinking)?$/)
-  if (legacyMatch) {
-    const [, modelType, , thinkingSuffix] = legacyMatch
-    const newFormat = thinkingSuffix
-      ? `claude-4-${modelType}-high-thinking`
-      : `claude-4-${modelType}-high`
-
-    if (MODEL_VARIANTS[newFormat]) {
-      return { ...MODEL_VARIANTS[newFormat], originalModel: model }
+  // Check if model name contains 'thinking' - enable thinking for any thinking variant
+  if (normalizedModel.includes('thinking')) {
+    // Determine base model
+    let baseModel = 'claude-sonnet-4-5' // default
+    if (normalizedModel.includes('opus')) {
+      baseModel = 'claude-opus-4-5'
+    } else if (normalizedModel.includes('haiku')) {
+      baseModel = 'claude-haiku-4-5'
+    }
+    
+    console.log(`🔍 [MODEL] Detected thinking variant: ${model} -> ${baseModel} with thinking`)
+    return {
+      model: baseModel,
+      maxTokens: 64000,
+      thinking: THINKING_CONFIG,
+      originalModel: model,
     }
   }
 
   // Handle Anthropic format directly (passthrough with defaults)
-  if (model.startsWith('claude-')) {
+  if (normalizedModel.startsWith('claude-')) {
     return {
       model,
       maxTokens: 8192,
