@@ -15,7 +15,16 @@ import {
   createConverterState,
   processChunk,
   convertNonStreamingResponse,
+  getThinkingBlockFromState,
+  getAccumulatedText,
 } from './utils/anthropic-to-openai-converter'
+import {
+  cacheThinkingBlockSync,
+  injectCachedThinkingBlocks,
+  isRedisAvailable,
+  type ContentBlock,
+  type AnthropicMessage,
+} from './utils/thinking-cache'
 import { corsPreflightHandler, corsMiddleware } from './utils/cors-bypass'
 import {
   isCursorKeyCheck,
@@ -174,6 +183,10 @@ app.get('/v1', (c) => {
       models: '/v1/models',
       chat: '/v1/chat/completions',
       messages: '/v1/messages'
+    },
+    thinkingCache: {
+      enabled: true,
+      redisAvailable: isRedisAvailable(),
     }
   })
 })
@@ -291,7 +304,7 @@ const messagesFn = async (c: Context) => {
   //   }
   // }
 
-  if (apiKey && apiKey !== process.env.API_KEY) {
+  if (process.env.API_KEY && apiKey !== process.env.API_KEY) {
     return c.json(
       {
         error: 'Authentication required',
@@ -449,6 +462,15 @@ const messagesFn = async (c: Context) => {
       }
     }
 
+    // Try to inject cached thinking blocks for multi-turn conversations
+    if (anthropicBody.messages && anthropicBody.messages.length > 0) {
+      const messagesWithThinking = anthropicBody.messages as AnthropicMessage[]
+      const injectedCount = await injectCachedThinkingBlocks(messagesWithThinking)
+      if (injectedCount > 0) {
+        console.log(`🧠 [THINKING] Injected ${injectedCount} cached thinking block(s)`)
+      }
+    }
+
     console.log(`📤 [FORWARD] Sending to Anthropic: ${anthropicBody.model}`)
 
     const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -524,6 +546,17 @@ const messagesFn = async (c: Context) => {
             } else {
               await stream.write(chunk)
             }
+          }
+
+          // Cache thinking block for future multi-turn conversations
+          const thinkingBlock = getThinkingBlockFromState(converterState)
+          const accumulatedText = getAccumulatedText(converterState)
+          if (thinkingBlock && accumulatedText) {
+            const contentBlocks: ContentBlock[] = [
+              thinkingBlock,
+              { type: 'text', text: accumulatedText },
+            ]
+            cacheThinkingBlockSync(contentBlocks, thinkingBlock)
           }
         } catch (error) {
           console.error('Stream error:', error)

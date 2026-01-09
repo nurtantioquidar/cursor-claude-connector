@@ -14,11 +14,14 @@ interface AnthropicMessage {
 }
 
 interface AnthropicContentBlock {
-  type: 'text' | 'tool_use'
+  type: 'text' | 'tool_use' | 'thinking' | 'redacted_thinking'
   id?: string
   name?: string
   text?: string
   input?: unknown
+  thinking?: string
+  signature?: string
+  data?: string
 }
 
 interface AnthropicStreamEvent {
@@ -29,10 +32,13 @@ interface AnthropicStreamEvent {
     text?: string
     partial_json?: string
     stop_reason?: string
+    thinking?: string
+    signature?: string
   }
   index?: number
   model?: string
   stop_reason?: string
+  signature?: string
   usage?: {
     input_tokens: number
     output_tokens: number
@@ -135,11 +141,21 @@ interface ProcessResult {
   data?: OpenAIStreamChunk
 }
 
+// Thinking block tracking
+interface ThinkingBlockData {
+  thinking: string
+  signature: string
+}
+
 // Converter state that needs to be maintained during streaming
 export interface ConverterState {
   toolCallsTracker: Map<number, ToolCallTracker>
   metricsData: MetricsData
   lineBuffer: string
+  // Thinking block tracking for cache
+  thinkingBlock: ThinkingBlockData | null
+  accumulatedText: string
+  inThinkingBlock: boolean
 }
 
 // Create initial converter state
@@ -157,7 +173,36 @@ export function createConverterState(): ConverterState {
       openAIId: null,
     },
     lineBuffer: '',
+    thinkingBlock: null,
+    accumulatedText: '',
+    inThinkingBlock: false,
   }
+}
+
+/**
+ * Get the captured thinking block from the converter state.
+ * Returns null if no thinking block was captured.
+ */
+export function getThinkingBlockFromState(state: ConverterState): {
+  type: 'thinking'
+  thinking: string
+  signature: string
+} | null {
+  if (state.thinkingBlock && (state.thinkingBlock.thinking || state.thinkingBlock.signature)) {
+    return {
+      type: 'thinking',
+      thinking: state.thinkingBlock.thinking,
+      signature: state.thinkingBlock.signature,
+    }
+  }
+  return null
+}
+
+/**
+ * Get the accumulated text content from the converter state.
+ */
+export function getAccumulatedText(state: ConverterState): string {
+  return state.accumulatedText
 }
 
 // Convert non-streaming response to OpenAI format (stateless)
@@ -260,7 +305,45 @@ export function processChunk(
         )
 
         // Skip certain event types that OpenAI doesn't use
-        if (data.type === 'ping' || data.type === 'content_block_stop') {
+        if (data.type === 'ping') {
+          continue
+        }
+
+        // Handle thinking block start
+        if (
+          data.type === 'content_block_start' &&
+          (data.content_block?.type === 'thinking' || data.content_block?.type === 'redacted_thinking')
+        ) {
+          state.inThinkingBlock = true
+          state.thinkingBlock = {
+            thinking: data.content_block.thinking || '',
+            signature: data.content_block.signature || '',
+          }
+          continue
+        }
+
+        // Handle thinking_delta events
+        if (data.type === 'content_block_delta' && data.delta?.thinking) {
+          if (state.thinkingBlock) {
+            state.thinkingBlock.thinking += data.delta.thinking
+          }
+          continue
+        }
+
+        // Handle signature_delta events
+        if (data.type === 'content_block_delta' && data.delta?.signature) {
+          if (state.thinkingBlock) {
+            state.thinkingBlock.signature += data.delta.signature
+          }
+          continue
+        }
+
+        // Handle content_block_stop - capture signature if present
+        if (data.type === 'content_block_stop') {
+          if (state.inThinkingBlock && data.signature && state.thinkingBlock) {
+            state.thinkingBlock.signature = data.signature
+          }
+          state.inThinkingBlock = false
           continue
         }
 
@@ -538,6 +621,9 @@ function transformToOpenAI(
       }
     }
   } else if (data.type === 'content_block_delta' && data.delta?.text) {
+    // Accumulate text for thinking cache
+    state.accumulatedText += data.delta.text
+
     openAIChunk = {
       id: state.metricsData.openAIId || 'chatcmpl-' + Date.now(),
       object: 'chat.completion.chunk' as const,

@@ -12,6 +12,7 @@ Get the best of both worlds by combining Claude's capabilities with a profession
 - No token limits from your Claude Max subscription
 - Full context understanding without compression
 - Handle large files and complex projects seamlessly
+- **Extended Thinking support** with multi-turn caching
 
 ### 🛠️ **Professional IDE Experience**
 
@@ -123,6 +124,7 @@ For detailed instructions or alternative deployment methods, see our **[Deployme
 | Claude Max Usage Limits | ✅         | ✅          | ✅ No Additional Limits |
 | Version Control         | ❌         | ⚠️          | ✅ Full Git Integration |
 | Development Extensions  | ❌         | ❌          | ✅ IDE Ecosystem        |
+| Extended Thinking       | ✅         | ✅          | ✅ Multi-turn Support   |
 | Cost                    | Claude Max | Claude Max  | Claude Max Only         |
 
 ## 🔐 API Key (Optional)
@@ -133,6 +135,37 @@ You can optionally set an `API_KEY` environment variable for additional security
 - Adds an extra layer of authentication to your proxy
 - Useful when deploying to public URLs
 - Leave empty to use without additional authentication
+
+## 🧠 Extended Thinking Support
+
+This proxy supports Claude's **Extended Thinking** feature, which enables deeper reasoning for complex tasks. The key challenge is that Anthropic's API requires cryptographic signatures in thinking blocks for multi-turn conversations, but Cursor strips these from conversation history.
+
+### How It Works
+
+The proxy implements a **Thinking Cache** that:
+
+1. **Captures** thinking blocks (with cryptographic signatures) when Claude responds
+2. **Stores** them in Upstash Redis (persistent) with content-based keys
+3. **Re-injects** them into conversation history on subsequent turns
+4. **Falls back** gracefully - if cache misses, thinking is disabled for that turn only
+
+### Configuration
+
+| Environment Variable | Default | Description |
+|---------------------|---------|-------------|
+| `UPSTASH_REDIS_REST_URL` | (required) | Your Upstash Redis REST URL |
+| `UPSTASH_REDIS_REST_TOKEN` | (required) | Your Upstash Redis REST token |
+| `THINKING_CACHE_TTL_DAYS` | `10` | How long thinking blocks are cached |
+| `DEBUG` | `false` | Enable verbose cache logging |
+
+### Using Thinking-Enabled Models
+
+To use Extended Thinking in Cursor:
+1. Select a thinking-enabled model (e.g., `claude-opus-4-5` with thinking)
+2. The proxy automatically handles thinking block caching
+3. Multi-turn conversations maintain thinking context
+
+> **Note**: Extended Thinking requires Upstash Redis to be configured. Without Redis, thinking blocks are cached in-memory only (won't persist across serverless invocations).
 
 ## 🛡️ Security
 
