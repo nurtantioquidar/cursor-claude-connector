@@ -115,6 +115,15 @@ interface OpenAIResponse {
     prompt_tokens: number
     completion_tokens: number
     total_tokens: number
+    // OpenAI prompt_tokens_details for Cursor context panel integration
+    prompt_tokens_details?: {
+      cached_tokens: number
+      audio_tokens?: number
+    }
+    completion_tokens_details?: {
+      reasoning_tokens: number
+      audio_tokens?: number
+    }
   }
 }
 
@@ -205,10 +214,51 @@ export function getAccumulatedText(state: ConverterState): string {
   return state.accumulatedText
 }
 
+/**
+ * Get usage metrics from the converter state (for streaming responses).
+ */
+export function getUsageFromState(state: ConverterState): {
+  inputTokens: number
+  outputTokens: number
+  totalTokens: number
+  cacheCreationTokens?: number
+  cacheReadTokens?: number
+  cacheHitRate?: number
+} | null {
+  const { metricsData } = state
+  if (metricsData.input_tokens === 0 && metricsData.output_tokens === 0) {
+    return null
+  }
+
+  const inputTokens = metricsData.input_tokens
+  const outputTokens = metricsData.output_tokens
+  const cacheCreationTokens = metricsData.cache_creation_input_tokens || undefined
+  const cacheReadTokens = metricsData.cache_read_input_tokens || undefined
+
+  // Calculate cache hit rate
+  let cacheHitRate: number | undefined
+  if (inputTokens > 0 && metricsData.cache_read_input_tokens > 0) {
+    cacheHitRate = Math.round((metricsData.cache_read_input_tokens / inputTokens) * 100)
+  }
+
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens: inputTokens + outputTokens,
+    cacheCreationTokens,
+    cacheReadTokens,
+    cacheHitRate,
+  }
+}
+
 // Convert non-streaming response to OpenAI format (stateless)
+// Includes prompt_tokens_details.cached_tokens for Cursor's context panel integration
 export function convertNonStreamingResponse(
   anthropicResponse: AnthropicResponse | AnthropicFullResponse,
 ): OpenAIResponse {
+  // Map Anthropic cache tokens to OpenAI format for Cursor integration
+  const cachedTokens = anthropicResponse.usage?.cache_read_input_tokens || 0
+
   const openAIResponse: OpenAIResponse = {
     id:
       'chatcmpl-' +
@@ -238,6 +288,14 @@ export function convertNonStreamingResponse(
       total_tokens:
         (anthropicResponse.usage?.input_tokens || 0) +
         (anthropicResponse.usage?.output_tokens || 0),
+      prompt_tokens_details: {
+        cached_tokens: cachedTokens,
+        audio_tokens: 0,
+      },
+      completion_tokens_details: {
+        reasoning_tokens: 0,
+        audio_tokens: 0,
+      },
     },
   }
 
@@ -444,7 +502,23 @@ function updateMetrics(
   }
 }
 
+// Extended usage type with OpenAI prompt_tokens_details for Cursor integration
+interface OpenAIUsageWithDetails {
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  prompt_tokens_details?: {
+    cached_tokens: number
+    audio_tokens?: number
+  }
+  completion_tokens_details?: {
+    reasoning_tokens: number
+    audio_tokens?: number
+  }
+}
+
 // Create usage chunk for OpenAI format
+// Includes prompt_tokens_details.cached_tokens for Cursor's context panel integration
 function createUsageChunk(state: ConverterState): OpenAIStreamChunk | null {
   // Only send usage if we have token data
   if (
@@ -452,6 +526,26 @@ function createUsageChunk(state: ConverterState): OpenAIStreamChunk | null {
     state.metricsData.output_tokens === 0
   ) {
     return null
+  }
+
+  // Map Anthropic cache tokens to OpenAI format for Cursor integration
+  // Anthropic: cache_read_input_tokens (tokens read from cache)
+  // OpenAI: prompt_tokens_details.cached_tokens
+  const cachedTokens = state.metricsData.cache_read_input_tokens || 0
+
+  const usage: OpenAIUsageWithDetails = {
+    prompt_tokens: state.metricsData.input_tokens,
+    completion_tokens: state.metricsData.output_tokens,
+    total_tokens:
+      state.metricsData.input_tokens + state.metricsData.output_tokens,
+    prompt_tokens_details: {
+      cached_tokens: cachedTokens,
+      audio_tokens: 0,
+    },
+    completion_tokens_details: {
+      reasoning_tokens: 0,
+      audio_tokens: 0,
+    },
   }
 
   return {
@@ -466,13 +560,8 @@ function createUsageChunk(state: ConverterState): OpenAIStreamChunk | null {
         finish_reason: null,
       },
     ],
-    usage: {
-      prompt_tokens: state.metricsData.input_tokens,
-      completion_tokens: state.metricsData.output_tokens,
-      total_tokens:
-        state.metricsData.input_tokens + state.metricsData.output_tokens,
-    },
-  }
+    usage,
+  } as OpenAIStreamChunk
 }
 
 // Transform Anthropic event to OpenAI format

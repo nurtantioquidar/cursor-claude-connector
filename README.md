@@ -136,6 +136,46 @@ You can optionally set an `API_KEY` environment variable for additional security
 - Useful when deploying to public URLs
 - Leave empty to use without additional authentication
 
+## 📊 Context Tracking & Visibility
+
+The proxy now provides detailed visibility into what Cursor sends to Claude, including:
+
+### Request Context Logging
+
+Every request logs:
+- **File references** extracted from context (paths, line ranges)
+- **Estimated token counts** (system prompt, messages, total)
+- **@ mentions** detected (files, folders, symbols)
+- **Tool definitions** count
+
+Example output:
+```
+📊 Context Summary:
+   Messages: 5 | Tools: 12
+   Estimated tokens: ~15,234 (system: 3,456, messages: 11,778)
+   📁 Files referenced (3):
+      - src/server.ts (lines 100-200)
+      - src/utils/context-extractor.ts
+      - package.json
+   @ Mentions:
+      Files: server.ts, config.ts
+      Symbols: extractContext, formatLog
+```
+
+### Token Usage Tracking
+
+After each response, the proxy logs actual token usage:
+```
+📈 Token Usage:
+   Input: 15,234 | Output: 2,156 | Total: 17,390
+   Cache: cache read: 12,000 | cache created: 3,234 | hit rate: 78%
+```
+
+This helps you understand:
+- How much context Cursor is sending
+- Which files are being included
+- Cache efficiency for cost optimization
+
 ## 🧠 Extended Thinking Support
 
 This proxy supports Claude's **Extended Thinking** feature, which enables deeper reasoning for complex tasks. The key challenge is that Anthropic's API requires cryptographic signatures in thinking blocks for multi-turn conversations, but Cursor strips these from conversation history.

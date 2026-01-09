@@ -17,6 +17,7 @@ import {
   convertNonStreamingResponse,
   getThinkingBlockFromState,
   getAccumulatedText,
+  getUsageFromState,
 } from './utils/anthropic-to-openai-converter'
 import {
   cacheThinkingBlockSync,
@@ -31,6 +32,14 @@ import {
   isCursorKeyCheck,
   createCursorBypassResponse,
 } from './utils/cursor-byok-bypass'
+import {
+  extractContext,
+  extractUsage,
+  formatContextLog,
+  formatUsageLog,
+  type ContextSummary,
+  type UsageInfo,
+} from './utils/context-extractor'
 import type {
   AnthropicRequestBody,
   AnthropicResponse,
@@ -368,6 +377,10 @@ const messagesFn = async (c: Context) => {
     console.log(`🧠 Thinking: enabled, budget_tokens=${variant.thinking.budget_tokens}`)
   }
 
+  // Extract and log context information from Cursor request
+  const contextSummary = extractContext(body)
+  console.log(formatContextLog(contextSummary))
+
   const apiKey = c.req.header('authorization')?.split(' ')?.[1]
 
   // Accept any key starting with 'sk-' or 'dummy' or the actual API_KEY
@@ -665,6 +678,12 @@ const messagesFn = async (c: Context) => {
             ]
             cacheThinkingBlockSync(contentBlocks, thinkingBlock)
           }
+
+          // Log token usage from streaming response
+          const streamUsage = getUsageFromState(converterState)
+          if (streamUsage) {
+            console.log(formatUsageLog(streamUsage))
+          }
         } catch (error) {
           console.error('Stream error:', error)
         } finally {
@@ -673,6 +692,12 @@ const messagesFn = async (c: Context) => {
       })
     } else {
       const responseData = (await response.json()) as AnthropicResponse
+
+      // Log token usage from response
+      const usageInfo = extractUsage(responseData)
+      if (usageInfo) {
+        console.log(formatUsageLog(usageInfo))
+      }
 
       if (transformToOpenAIFormat) {
         const openAIResponse = convertNonStreamingResponse(responseData)
