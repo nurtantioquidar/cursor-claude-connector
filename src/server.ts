@@ -274,32 +274,12 @@ interface ModelVariantConfig {
 
 const MODEL_VARIANTS: Record<string, ModelVariantConfig> = {
   // Opus variants
-  'claude-4-opus-high': {
-    model: 'claude-opus-4-5',
-    maxTokens: 32000,
-    thinking: null,
-  },
-  'claude-4-opus-high-thinking': {
-    model: 'claude-opus-4-5',
-    maxTokens: 64000,
-    thinking: { type: 'enabled', budget_tokens: 32000 },
-  },
   'claude-4.5-opus-high-thinking': {
     model: 'claude-opus-4-5',
     maxTokens: 64000,
     thinking: { type: 'enabled', budget_tokens: 32000 },
   },
   // Sonnet variants
-  'claude-4-sonnet-high': {
-    model: 'claude-sonnet-4-5',
-    maxTokens: 32000,
-    thinking: null,
-  },
-  'claude-4-sonnet-high-thinking': {
-    model: 'claude-sonnet-4-5',
-    maxTokens: 64000,
-    thinking: { type: 'enabled', budget_tokens: 32000 },
-  },
   'claude-4.5-sonnet-high-thinking': {
     model: 'claude-sonnet-4-5',
     maxTokens: 64000,
