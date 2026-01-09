@@ -264,13 +264,85 @@ app.get('/v1/models', async (c: Context) => {
   }
 })
 
-const mapModelAlias = (model: string): string => {
-  const mapping: Record<string, string> = {
-    // Cursor Naming -> Anthropic API ID
-    'claude-4.5-opus-high-thinking': 'claude-opus-4-5',
+// Model variant configurations for Cursor
+// Maps Cursor model names to Anthropic API parameters
+interface ModelVariantConfig {
+  model: string
+  maxTokens: number
+  thinking: { type: 'enabled'; budget_tokens: number } | null
+}
+
+const MODEL_VARIANTS: Record<string, ModelVariantConfig> = {
+  // Opus variants
+  'claude-4-opus-high': {
+    model: 'claude-opus-4-5',
+    maxTokens: 32000,
+    thinking: null,
+  },
+  'claude-4-opus-high-thinking': {
+    model: 'claude-opus-4-5',
+    maxTokens: 64000,
+    thinking: { type: 'enabled', budget_tokens: 32000 },
+  },
+  'claude-4.5-opus-high-thinking': {
+    model: 'claude-opus-4-5',
+    maxTokens: 64000,
+    thinking: { type: 'enabled', budget_tokens: 32000 },
+  },
+  // Sonnet variants
+  'claude-4-sonnet-high': {
+    model: 'claude-sonnet-4-5',
+    maxTokens: 32000,
+    thinking: null,
+  },
+  'claude-4-sonnet-high-thinking': {
+    model: 'claude-sonnet-4-5',
+    maxTokens: 64000,
+    thinking: { type: 'enabled', budget_tokens: 32000 },
+  },
+  'claude-4.5-sonnet-high-thinking': {
+    model: 'claude-sonnet-4-5',
+    maxTokens: 64000,
+    thinking: { type: 'enabled', budget_tokens: 32000 },
+  },
+}
+
+const resolveModelVariant = (model: string): ModelVariantConfig & { originalModel: string } => {
+  // Check if it's a known Cursor variant
+  if (MODEL_VARIANTS[model]) {
+    return { ...MODEL_VARIANTS[model], originalModel: model }
   }
 
-  return mapping[model] || model
+  // Handle legacy format: claude-4.5-{model}-{budget}[-thinking]
+  const legacyMatch = model.match(/^claude-4\.5-(opus|sonnet|haiku)(?:-(high|medium|low))?(-thinking)?$/)
+  if (legacyMatch) {
+    const [, modelType, , thinkingSuffix] = legacyMatch
+    const newFormat = thinkingSuffix
+      ? `claude-4-${modelType}-high-thinking`
+      : `claude-4-${modelType}-high`
+
+    if (MODEL_VARIANTS[newFormat]) {
+      return { ...MODEL_VARIANTS[newFormat], originalModel: model }
+    }
+  }
+
+  // Handle Anthropic format directly (passthrough with defaults)
+  if (model.startsWith('claude-')) {
+    return {
+      model,
+      maxTokens: 8192,
+      thinking: null,
+      originalModel: model,
+    }
+  }
+
+  // Unknown format, passthrough with defaults
+  return {
+    model,
+    maxTokens: 8192,
+    thinking: null,
+    originalModel: model,
+  }
 }
 
 const messagesFn = async (c: Context) => {
@@ -278,15 +350,19 @@ const messagesFn = async (c: Context) => {
   headers.host = 'api.anthropic.com'
   const body: AnthropicRequestBody = await c.req.json()
 
-  // Map model alias
-  const originalModel = body.model;
-  body.model = mapModelAlias(body.model);
+  // Resolve model variant to get model name, max tokens, and thinking config
+  const variant = resolveModelVariant(body.model)
+  const originalModel = body.model
+  body.model = variant.model
 
   const isStreaming = body.stream === true
 
   console.log(`\n📥 [REQUEST] ${c.req.method} ${c.req.path}`)
   console.log(`🤖 Model: ${originalModel}${originalModel !== body.model ? ` -> ${body.model}` : ''}`)
   console.log(`📡 Streaming: ${isStreaming}`)
+  if (variant.thinking) {
+    console.log(`🧠 Thinking: enabled, budget_tokens=${variant.thinking.budget_tokens}`)
+  }
 
   const apiKey = c.req.header('authorization')?.split(' ')?.[1]
 
@@ -401,12 +477,8 @@ const messagesFn = async (c: Context) => {
         })
       }
 
-      if (body.model.includes('opus')) {
-        body.max_tokens = 32_000
-      }
-      if (body.model.includes('sonnet')) {
-        body.max_tokens = 64_000
-      }
+      // Use variant's maxTokens if available
+      body.max_tokens = variant.maxTokens
     }
 
     const oauthToken = await getAccessToken()
@@ -422,10 +494,16 @@ const messagesFn = async (c: Context) => {
       )
     }
 
+    // Build anthropic-beta header - add interleaved-thinking when thinking is enabled
+    const betaFeatures = ['oauth-2025-04-20', 'fine-grained-tool-streaming-2025-05-14', 'prompt-caching-2024-07-31']
+    if (variant.thinking) {
+      betaFeatures.push('interleaved-thinking-2025-05-14')
+    }
+
     headers = {
       'content-type': 'application/json',
       authorization: `Bearer ${oauthToken}`,
-      'anthropic-beta': 'oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,prompt-caching-2024-07-31',
+      'anthropic-beta': betaFeatures.join(','),
       'anthropic-version': '2023-06-01',
       'user-agent': 'anthropic-cli/0.2.29',
       'anthropic-client': 'anthropic-cli/0.2.29',
@@ -438,7 +516,7 @@ const messagesFn = async (c: Context) => {
       model: body.model,
       messages: body.messages,
       system: body.system,
-      max_tokens: body.max_tokens || 4096,
+      max_tokens: body.max_tokens || variant.maxTokens || 4096,
       stream: body.stream,
       stop_sequences: body.stop_sequences || body.stop,
       temperature: body.temperature,
@@ -448,6 +526,13 @@ const messagesFn = async (c: Context) => {
       tools: body.tools,
       tool_choice: body.tool_choice,
     };
+
+    // Add thinking parameter if enabled for this model variant
+    if (variant.thinking) {
+      anthropicBody.thinking = variant.thinking
+      // Note: temperature must be 1 when thinking is enabled (Anthropic requirement)
+      anthropicBody.temperature = 1
+    }
 
     // Remove undefined fields
     Object.keys(anthropicBody).forEach(key => anthropicBody[key] === undefined && delete anthropicBody[key]);
