@@ -209,9 +209,17 @@ app.use('*', async (c, next) => {
 
 app.get('/v1/models', async (c: Context) => {
   const fallbackModels: ModelInfo[] = [
-    // Claude Models
+    // Cursor-compatible model variants (these match what Cursor expects)
+    { id: 'claude-4-opus-high', object: 'model', created: 1730000000, owned_by: 'anthropic' },
+    { id: 'claude-4-opus-high-thinking', object: 'model', created: 1730000000, owned_by: 'anthropic' },
+    { id: 'claude-4-sonnet-high', object: 'model', created: 1730000000, owned_by: 'anthropic' },
+    { id: 'claude-4-sonnet-high-thinking', object: 'model', created: 1730000000, owned_by: 'anthropic' },
+    // Base Anthropic models
+    { id: 'claude-opus-4-5', object: 'model', created: 1730000000, owned_by: 'anthropic' },
+    { id: 'claude-sonnet-4-5', object: 'model', created: 1730000000, owned_by: 'anthropic' },
+    // Legacy format
     { id: 'claude-4.5-sonnet', object: 'model', created: 1730000000, owned_by: 'anthropic' },
-
+    { id: 'claude-4.5-opus', object: 'model', created: 1730000000, owned_by: 'anthropic' },
     // Cursor/Composer Models (Catch-all to keep proxy active)
     { id: 'composer-1', object: 'model', created: 1730000000, owned_by: 'cursor' },
   ]
@@ -286,7 +294,29 @@ interface ModelVariantConfig {
 const THINKING_CONFIG = { type: 'enabled' as const, budget_tokens: 32000 }
 
 const MODEL_VARIANTS: Record<string, ModelVariantConfig> = {
-  // Opus variants - all patterns Cursor might send
+  // Opus variants - ccproxy compatible format (claude-4-*)
+  'claude-4-opus-high-thinking': {
+    model: 'claude-opus-4-5',
+    maxTokens: 64000,
+    thinking: THINKING_CONFIG,
+  },
+  'claude-4-opus-high': {
+    model: 'claude-opus-4-5',
+    maxTokens: 32000,
+    thinking: null,
+  },
+  // Sonnet variants - ccproxy compatible format (claude-4-*)
+  'claude-4-sonnet-high-thinking': {
+    model: 'claude-sonnet-4-5',
+    maxTokens: 64000,
+    thinking: THINKING_CONFIG,
+  },
+  'claude-4-sonnet-high': {
+    model: 'claude-sonnet-4-5',
+    maxTokens: 32000,
+    thinking: null,
+  },
+  // Legacy format (claude-4.5-*)
   'claude-4.5-opus-high-thinking': {
     model: 'claude-opus-4-5',
     maxTokens: 64000,
@@ -294,10 +324,9 @@ const MODEL_VARIANTS: Record<string, ModelVariantConfig> = {
   },
   'claude-4.5-opus-high': {
     model: 'claude-opus-4-5',
-    maxTokens: 64000,
+    maxTokens: 32000,
     thinking: null,
   },
-  // Sonnet variants - all patterns Cursor might send
   'claude-4.5-sonnet-high-thinking': {
     model: 'claude-sonnet-4-5',
     maxTokens: 64000,
@@ -305,7 +334,7 @@ const MODEL_VARIANTS: Record<string, ModelVariantConfig> = {
   },
   'claude-4.5-sonnet-high': {
     model: 'claude-sonnet-4-5',
-    maxTokens: 64000,
+    maxTokens: 32000,
     thinking: null,
   },
 }
