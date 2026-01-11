@@ -209,17 +209,14 @@ app.use('*', async (c, next) => {
 
 app.get('/v1/models', async (c: Context) => {
   const fallbackModels: ModelInfo[] = [
-    // Cursor-compatible model variants (these match what Cursor expects)
-    { id: 'claude-4-opus-high', object: 'model', created: 1730000000, owned_by: 'anthropic' },
-    { id: 'claude-4-opus-high-thinking', object: 'model', created: 1730000000, owned_by: 'anthropic' },
-    { id: 'claude-4-sonnet-high', object: 'model', created: 1730000000, owned_by: 'anthropic' },
-    { id: 'claude-4-sonnet-high-thinking', object: 'model', created: 1730000000, owned_by: 'anthropic' },
-    // Base Anthropic models
+    // Claude 4.5 variants with thinking support
+    { id: 'claude-4.5-opus-high', object: 'model', created: 1730000000, owned_by: 'anthropic' },
+    { id: 'claude-4.5-opus-high-thinking', object: 'model', created: 1730000000, owned_by: 'anthropic' },
+    { id: 'claude-4.5-sonnet-high', object: 'model', created: 1730000000, owned_by: 'anthropic' },
+    { id: 'claude-4.5-sonnet-high-thinking', object: 'model', created: 1730000000, owned_by: 'anthropic' },
+    // Base Anthropic models (native API names)
     { id: 'claude-opus-4-5', object: 'model', created: 1730000000, owned_by: 'anthropic' },
     { id: 'claude-sonnet-4-5', object: 'model', created: 1730000000, owned_by: 'anthropic' },
-    // Legacy format
-    { id: 'claude-4.5-sonnet', object: 'model', created: 1730000000, owned_by: 'anthropic' },
-    { id: 'claude-4.5-opus', object: 'model', created: 1730000000, owned_by: 'anthropic' },
     // Cursor/Composer Models (Catch-all to keep proxy active)
     { id: 'composer-1', object: 'model', created: 1730000000, owned_by: 'cursor' },
   ]
@@ -294,29 +291,7 @@ interface ModelVariantConfig {
 const THINKING_CONFIG = { type: 'enabled' as const, budget_tokens: 32000 }
 
 const MODEL_VARIANTS: Record<string, ModelVariantConfig> = {
-  // Opus variants - ccproxy compatible format (claude-4-*)
-  'claude-4-opus-high-thinking': {
-    model: 'claude-opus-4-5',
-    maxTokens: 64000,
-    thinking: THINKING_CONFIG,
-  },
-  'claude-4-opus-high': {
-    model: 'claude-opus-4-5',
-    maxTokens: 32000,
-    thinking: null,
-  },
-  // Sonnet variants - ccproxy compatible format (claude-4-*)
-  'claude-4-sonnet-high-thinking': {
-    model: 'claude-sonnet-4-5',
-    maxTokens: 64000,
-    thinking: THINKING_CONFIG,
-  },
-  'claude-4-sonnet-high': {
-    model: 'claude-sonnet-4-5',
-    maxTokens: 32000,
-    thinking: null,
-  },
-  // Legacy format (claude-4.5-*)
+  // Claude 4.5 Opus variants
   'claude-4.5-opus-high-thinking': {
     model: 'claude-opus-4-5',
     maxTokens: 64000,
@@ -327,6 +302,7 @@ const MODEL_VARIANTS: Record<string, ModelVariantConfig> = {
     maxTokens: 32000,
     thinking: null,
   },
+  // Claude 4.5 Sonnet variants
   'claude-4.5-sonnet-high-thinking': {
     model: 'claude-sonnet-4-5',
     maxTokens: 64000,
@@ -664,8 +640,8 @@ const messagesFn = async (c: Context) => {
       const decoder = new TextDecoder()
 
       return stream(c, async (stream) => {
-        // Pass original model name for Cursor's context window tracking
-        const converterState = createConverterState(originalModel)
+        // Anthropic's native model name will be captured from message_start event
+        const converterState = createConverterState()
         const enableLogging = false
 
         try {
@@ -730,8 +706,8 @@ const messagesFn = async (c: Context) => {
       }
 
       if (transformToOpenAIFormat) {
-        // Pass original model name for Cursor's context window tracking
-        const openAIResponse = convertNonStreamingResponse(responseData, originalModel)
+        // Uses Anthropic's native model name for accurate Cursor context window calculation
+        const openAIResponse = convertNonStreamingResponse(responseData)
 
         response.headers.forEach((value, key) => {
           if (key.toLowerCase() !== 'content-encoding') {
