@@ -366,14 +366,60 @@ export function formatContextLog(context: ContextSummary): string {
   return lines.join('\n')
 }
 
+// Context window sizes for Claude models (tokens)
+const CONTEXT_WINDOW_SIZES: Record<string, number> = {
+  'claude-opus-4-5': 200000,
+  'claude-sonnet-4-5': 200000,
+  'claude-haiku-4-5': 200000,
+  'claude-3-5-sonnet': 200000,
+  'claude-3-5-haiku': 200000,
+  'claude-3-opus': 200000,
+  'claude-3-sonnet': 200000,
+  'claude-3-haiku': 200000,
+  // Default for unknown models
+  'default': 200000,
+}
+
 /**
- * Format usage info for logging
+ * Get context window size for a model
  */
-export function formatUsageLog(usage: UsageInfo): string {
+export function getContextWindowSize(model: string): number {
+  // Try exact match first
+  if (CONTEXT_WINDOW_SIZES[model]) {
+    return CONTEXT_WINDOW_SIZES[model]
+  }
+  
+  // Try prefix match (handles dated model names like claude-sonnet-4-5-20250514)
+  for (const [key, size] of Object.entries(CONTEXT_WINDOW_SIZES)) {
+    if (model.startsWith(key) || model.includes(key)) {
+      return size
+    }
+  }
+  
+  return CONTEXT_WINDOW_SIZES['default']
+}
+
+/**
+ * Format usage info for logging with context window percentage
+ */
+export function formatUsageLog(usage: UsageInfo, model?: string): string {
   const lines: string[] = []
 
   lines.push(`📈 Token Usage:`)
   lines.push(`   Input: ${usage.inputTokens.toLocaleString()} | Output: ${usage.outputTokens.toLocaleString()} | Total: ${usage.totalTokens.toLocaleString()}`)
+
+  // Show context window usage percentage
+  if (model && usage.inputTokens > 0) {
+    const contextWindow = getContextWindowSize(model)
+    const usagePercent = ((usage.inputTokens / contextWindow) * 100).toFixed(1)
+    lines.push(`   Context Window: ${usagePercent}% used (${usage.inputTokens.toLocaleString()} / ${contextWindow.toLocaleString()})`)
+    
+    if (parseFloat(usagePercent) > 75) {
+      lines.push(`   ⚠️  Warning: >75% context used - consider using /summarize`)
+    } else if (parseFloat(usagePercent) > 50) {
+      lines.push(`   ℹ️  Note: >50% context used`)
+    }
+  }
 
   if (usage.cacheReadTokens || usage.cacheCreationTokens) {
     const cacheInfo: string[] = []

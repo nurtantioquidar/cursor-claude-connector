@@ -688,7 +688,9 @@ const messagesFn = async (c: Context) => {
           // Log token usage from streaming response
           const streamUsage = getUsageFromState(converterState)
           if (streamUsage) {
-            console.log(formatUsageLog(streamUsage))
+            // Pass model name for context window percentage calculation
+            const modelName = converterState.metricsData.model || body.model
+            console.log(formatUsageLog(streamUsage, modelName))
           }
         } catch (error) {
           console.error('Stream error:', error)
@@ -702,7 +704,9 @@ const messagesFn = async (c: Context) => {
       // Log token usage from response
       const usageInfo = extractUsage(responseData)
       if (usageInfo) {
-        console.log(formatUsageLog(usageInfo))
+        // Pass model name for context window percentage calculation
+        const modelName = responseData.model || body.model
+        console.log(formatUsageLog(usageInfo, modelName))
       }
 
       if (transformToOpenAIFormat) {

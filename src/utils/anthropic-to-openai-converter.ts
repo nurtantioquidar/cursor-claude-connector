@@ -455,6 +455,10 @@ export function processChunk(
 }
 
 // Update metrics data
+// IMPORTANT: Anthropic streaming sends usage in two events:
+// - message_start: input_tokens (full count), output_tokens = 0
+// - message_delta: input_tokens (same count repeated), output_tokens (final count)
+// We must use ASSIGNMENT (=) not accumulation (+=) to avoid double-counting
 function updateMetrics(
   metricsData: MetricsData,
   data: AnthropicStreamEvent,
@@ -463,6 +467,15 @@ function updateMetrics(
     metricsData.messageId = data.message.id
     if (data.message.model) {
       metricsData.model = data.message.model
+    }
+    // message_start contains the definitive input token count
+    if (data.message.usage) {
+      metricsData.input_tokens = data.message.usage.input_tokens || 0
+      metricsData.cache_creation_input_tokens =
+        data.message.usage.cache_creation_input_tokens || 0
+      metricsData.cache_read_input_tokens =
+        data.message.usage.cache_read_input_tokens || 0
+      // output_tokens is 0 at message_start, ignore it
     }
   }
 
@@ -474,29 +487,16 @@ function updateMetrics(
     metricsData.stop_reason = data.stop_reason
   }
 
-  if (data.type === 'message_delta' && data?.delta?.stop_reason) {
-    metricsData.stop_reason = data.delta.stop_reason
-  }
-
-  if (data.usage) {
-    metricsData.input_tokens += data.usage.input_tokens || 0
-    metricsData.output_tokens += data.usage.output_tokens || 0
-    metricsData.cache_creation_input_tokens +=
-      data.usage.cache_creation_input_tokens || 0
-    metricsData.cache_read_input_tokens +=
-      data.usage.cache_read_input_tokens || 0
-  }
-
-  if (data?.message?.usage) {
-    if (data?.message?.model) {
-      metricsData.model = data.message.model
+  // message_delta contains the final output token count
+  if (data.type === 'message_delta') {
+    if (data?.delta?.stop_reason) {
+      metricsData.stop_reason = data.delta.stop_reason
     }
-    metricsData.input_tokens += data.message.usage.input_tokens || 0
-    metricsData.output_tokens += data.message.usage.output_tokens || 0
-    metricsData.cache_creation_input_tokens +=
-      data.message.usage.cache_creation_input_tokens || 0
-    metricsData.cache_read_input_tokens +=
-      data.message.usage.cache_read_input_tokens || 0
+    // message_delta.usage contains final output_tokens
+    if (data.usage) {
+      metricsData.output_tokens = data.usage.output_tokens || 0
+      // Don't re-assign input_tokens here - it's the same as message_start
+    }
   }
 
   if (data?.message?.stop_reason) {
