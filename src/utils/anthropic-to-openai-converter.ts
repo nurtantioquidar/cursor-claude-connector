@@ -216,6 +216,7 @@ export function getAccumulatedText(state: ConverterState): string {
 
 /**
  * Get usage metrics from the converter state (for streaming responses).
+ * IMPORTANT: inputTokens is the TOTAL including cached tokens.
  */
 export function getUsageFromState(state: ConverterState): {
   inputTokens: number
@@ -226,25 +227,31 @@ export function getUsageFromState(state: ConverterState): {
   cacheHitRate?: number
 } | null {
   const { metricsData } = state
-  if (metricsData.input_tokens === 0 && metricsData.output_tokens === 0) {
+  
+  // Calculate TOTAL input tokens (Anthropic splits them into cached/non-cached)
+  const totalInputTokens = 
+    (metricsData.input_tokens || 0) +
+    (metricsData.cache_read_input_tokens || 0) +
+    (metricsData.cache_creation_input_tokens || 0)
+  
+  if (totalInputTokens === 0 && metricsData.output_tokens === 0) {
     return null
   }
 
-  const inputTokens = metricsData.input_tokens
   const outputTokens = metricsData.output_tokens
   const cacheCreationTokens = metricsData.cache_creation_input_tokens || undefined
   const cacheReadTokens = metricsData.cache_read_input_tokens || undefined
 
-  // Calculate cache hit rate
+  // Calculate cache hit rate (percentage of input that came from cache)
   let cacheHitRate: number | undefined
-  if (inputTokens > 0 && metricsData.cache_read_input_tokens > 0) {
-    cacheHitRate = Math.round((metricsData.cache_read_input_tokens / inputTokens) * 100)
+  if (totalInputTokens > 0 && metricsData.cache_read_input_tokens > 0) {
+    cacheHitRate = Math.round((metricsData.cache_read_input_tokens / totalInputTokens) * 100)
   }
 
   return {
-    inputTokens,
+    inputTokens: totalInputTokens,
     outputTokens,
-    totalTokens: inputTokens + outputTokens,
+    totalTokens: totalInputTokens + outputTokens,
     cacheCreationTokens,
     cacheReadTokens,
     cacheHitRate,
@@ -254,11 +261,17 @@ export function getUsageFromState(state: ConverterState): {
 // Convert non-streaming response to OpenAI format (stateless)
 // Includes prompt_tokens_details.cached_tokens for Cursor's context panel integration
 // Uses Anthropic's native model name for accurate Cursor context window calculation
+// IMPORTANT: Anthropic's input_tokens only counts NON-CACHED tokens.
+// Total prompt tokens = input_tokens + cache_read_input_tokens + cache_creation_input_tokens
 export function convertNonStreamingResponse(
   anthropicResponse: AnthropicResponse | AnthropicFullResponse,
 ): OpenAIResponse {
-  // Map Anthropic cache tokens to OpenAI format for Cursor integration
-  const cachedTokens = anthropicResponse.usage?.cache_read_input_tokens || 0
+  // Calculate TOTAL input tokens (Anthropic splits them into cached/non-cached)
+  const rawInputTokens = anthropicResponse.usage?.input_tokens || 0
+  const cacheReadTokens = anthropicResponse.usage?.cache_read_input_tokens || 0
+  const cacheCreationTokens = anthropicResponse.usage?.cache_creation_input_tokens || 0
+  const totalInputTokens = rawInputTokens + cacheReadTokens + cacheCreationTokens
+  const outputTokens = anthropicResponse.usage?.output_tokens || 0
 
   const openAIResponse: OpenAIResponse = {
     id:
@@ -285,13 +298,12 @@ export function convertNonStreamingResponse(
       },
     ],
     usage: {
-      prompt_tokens: anthropicResponse.usage?.input_tokens || 0,
-      completion_tokens: anthropicResponse.usage?.output_tokens || 0,
-      total_tokens:
-        (anthropicResponse.usage?.input_tokens || 0) +
-        (anthropicResponse.usage?.output_tokens || 0),
+      // prompt_tokens should be TOTAL input tokens for accurate context tracking
+      prompt_tokens: totalInputTokens,
+      completion_tokens: outputTokens,
+      total_tokens: totalInputTokens + outputTokens,
       prompt_tokens_details: {
-        cached_tokens: cachedTokens,
+        cached_tokens: cacheReadTokens,
         audio_tokens: 0,
       },
       completion_tokens_details: {
@@ -455,10 +467,9 @@ export function processChunk(
 }
 
 // Update metrics data
-// IMPORTANT: Anthropic streaming sends usage in two events:
-// - message_start: input_tokens (full count), output_tokens = 0
-// - message_delta: input_tokens (same count repeated), output_tokens (final count)
-// We must use ASSIGNMENT (=) not accumulation (+=) to avoid double-counting
+// IMPORTANT: Anthropic's input_tokens only counts NON-CACHED tokens.
+// Total context = input_tokens + cache_read_input_tokens + cache_creation_input_tokens
+// We store the raw values and calculate totals when creating the usage chunk.
 function updateMetrics(
   metricsData: MetricsData,
   data: AnthropicStreamEvent,
@@ -470,13 +481,12 @@ function updateMetrics(
     }
     // message_start contains the definitive input token count
     if (data.message.usage) {
-      console.log(`🔍 [DEBUG] message_start usage:`, JSON.stringify(data.message.usage))
+      // Store raw values - we'll calculate total later
       metricsData.input_tokens = data.message.usage.input_tokens || 0
       metricsData.cache_creation_input_tokens =
         data.message.usage.cache_creation_input_tokens || 0
       metricsData.cache_read_input_tokens =
         data.message.usage.cache_read_input_tokens || 0
-      // output_tokens is 0 at message_start, ignore it
     }
   }
 
@@ -495,9 +505,7 @@ function updateMetrics(
     }
     // message_delta.usage contains final output_tokens
     if (data.usage) {
-      console.log(`🔍 [DEBUG] message_delta usage:`, JSON.stringify(data.usage))
       metricsData.output_tokens = data.usage.output_tokens || 0
-      // Don't re-assign input_tokens here - it's the same as message_start
     }
   }
 
@@ -523,25 +531,32 @@ interface OpenAIUsageWithDetails {
 
 // Create usage chunk for OpenAI format
 // Includes prompt_tokens_details.cached_tokens for Cursor's context panel integration
+// IMPORTANT: Anthropic's input_tokens only counts NON-CACHED tokens.
+// Total prompt tokens = input_tokens + cache_read_input_tokens + cache_creation_input_tokens
 function createUsageChunk(state: ConverterState): OpenAIStreamChunk | null {
+  const { metricsData } = state
+  
+  // Calculate TOTAL input tokens (Anthropic splits them into cached/non-cached)
+  // This is what Cursor needs for accurate context window tracking
+  const totalInputTokens = 
+    (metricsData.input_tokens || 0) +
+    (metricsData.cache_read_input_tokens || 0) +
+    (metricsData.cache_creation_input_tokens || 0)
+  
   // Only send usage if we have token data
-  if (
-    state.metricsData.input_tokens === 0 &&
-    state.metricsData.output_tokens === 0
-  ) {
+  if (totalInputTokens === 0 && metricsData.output_tokens === 0) {
     return null
   }
 
   // Map Anthropic cache tokens to OpenAI format for Cursor integration
-  // Anthropic: cache_read_input_tokens (tokens read from cache)
-  // OpenAI: prompt_tokens_details.cached_tokens
-  const cachedTokens = state.metricsData.cache_read_input_tokens || 0
+  // cached_tokens = tokens that were read from cache (cost savings)
+  const cachedTokens = metricsData.cache_read_input_tokens || 0
 
   const usage: OpenAIUsageWithDetails = {
-    prompt_tokens: state.metricsData.input_tokens,
-    completion_tokens: state.metricsData.output_tokens,
-    total_tokens:
-      state.metricsData.input_tokens + state.metricsData.output_tokens,
+    // prompt_tokens should be TOTAL input tokens for accurate context tracking
+    prompt_tokens: totalInputTokens,
+    completion_tokens: metricsData.output_tokens,
+    total_tokens: totalInputTokens + metricsData.output_tokens,
     prompt_tokens_details: {
       cached_tokens: cachedTokens,
       audio_tokens: 0,
@@ -553,11 +568,11 @@ function createUsageChunk(state: ConverterState): OpenAIStreamChunk | null {
   }
 
   return {
-    id: state.metricsData.openAIId || 'chatcmpl-' + Date.now(),
+    id: metricsData.openAIId || 'chatcmpl-' + Date.now(),
     object: 'chat.completion.chunk' as const,
     created: Math.floor(Date.now() / 1000),
     // Use Anthropic's native model name for accurate Cursor context window calculation
-    model: state.metricsData.model || 'claude-unknown',
+    model: metricsData.model || 'claude-unknown',
     choices: [
       {
         index: 0,
