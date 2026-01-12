@@ -470,6 +470,7 @@ function updateMetrics(
     }
     // message_start contains the definitive input token count
     if (data.message.usage) {
+      console.log(`🔍 [DEBUG] message_start usage:`, JSON.stringify(data.message.usage))
       metricsData.input_tokens = data.message.usage.input_tokens || 0
       metricsData.cache_creation_input_tokens =
         data.message.usage.cache_creation_input_tokens || 0
@@ -494,6 +495,7 @@ function updateMetrics(
     }
     // message_delta.usage contains final output_tokens
     if (data.usage) {
+      console.log(`🔍 [DEBUG] message_delta usage:`, JSON.stringify(data.usage))
       metricsData.output_tokens = data.usage.output_tokens || 0
       // Don't re-assign input_tokens here - it's the same as message_start
     }
