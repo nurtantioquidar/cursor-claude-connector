@@ -500,6 +500,14 @@ const messagesFn = async (c: Context) => {
         })
       }
 
+      // Inject thinking instruction when thinking is enabled
+      if (variant.thinking) {
+        body.system.push({
+          type: 'text',
+          text: "You have extended thinking enabled. Always use your thinking capability to reason through problems step-by-step before responding, even for seemingly simple requests. Your thinking helps ensure accuracy and thoroughness.",
+        })
+      }
+
       // Use variant's maxTokens if available
       body.max_tokens = variant.maxTokens
     }
