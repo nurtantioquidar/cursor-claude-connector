@@ -77,10 +77,10 @@ function getRedis(): Redis | null {
 }
 
 /**
- * Generate a cache key from assistant message content.
- * Uses a simple hash of the normalized content for reliable matching.
+ * Normalize content for cache key generation.
+ * Handles various content formats and normalizes for reliable matching.
  */
-function generateCacheKey(content: string | ContentBlock[]): string {
+function normalizeContent(content: string | ContentBlock[]): string {
   let textContent = ''
 
   if (typeof content === 'string') {
@@ -95,6 +95,7 @@ function generateCacheKey(content: string | ContentBlock[]): string {
       if (block.type === 'text') {
         parts.push(block.text || '')
       } else if (block.type === 'tool_use') {
+        // Normalize tool inputs by sorting keys for consistent hashing
         const inputStr = block.input
           ? JSON.stringify(block.input, Object.keys(block.input as object).sort())
           : '{}'
@@ -108,21 +109,62 @@ function generateCacheKey(content: string | ContentBlock[]): string {
     textContent = parts.join('|')
   }
 
-  // Normalize whitespace
-  const normalized = textContent.replace(/\s+/g, ' ').trim()
+  // Aggressive normalization for reliable matching:
+  // 1. Collapse all whitespace (newlines, tabs, multiple spaces) to single space
+  // 2. Trim leading/trailing whitespace
+  // 3. Remove common escape sequences that might differ
+  return textContent
+    .replace(/\\n/g, ' ')
+    .replace(/\\t/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
 
-  // Simple hash function (works in both Node and browser)
-  let hash = 0
-  for (let i = 0; i < normalized.length; i++) {
-    const char = normalized.charCodeAt(i)
-    hash = (hash << 5) - hash + char
-    hash = hash & hash // Convert to 32bit integer
+/**
+ * Generate a hash from normalized content.
+ * Uses FNV-1a hash for better distribution than simple addition.
+ */
+function hashContent(content: string): number {
+  // FNV-1a hash parameters (32-bit)
+  const FNV_PRIME = 0x01000193
+  const FNV_OFFSET = 0x811c9dc5
+
+  let hash = FNV_OFFSET
+
+  for (let i = 0; i < content.length; i++) {
+    hash ^= content.charCodeAt(i)
+    hash = Math.imul(hash, FNV_PRIME)
   }
 
-  const key = `v2:${Math.abs(hash)}:${normalized.length}`
+  return hash >>> 0 // Convert to unsigned
+}
+
+/**
+ * Generate a cache key from assistant message content.
+ * Uses normalized content with FNV-1a hash for reliable matching.
+ */
+function generateCacheKey(content: string | ContentBlock[]): string {
+  const normalized = normalizeContent(content)
+  const hash = hashContent(normalized)
+
+  // Include content length as additional discriminator
+  const key = `v3:${hash}:${normalized.length}`
   debugLog('Generated key:', key, 'from content length:', normalized.length)
 
   return key
+}
+
+/**
+ * Generate a short key for fallback matching (first N chars + length).
+ * This helps when content has minor differences at the end.
+ */
+function generateShortKey(content: string | ContentBlock[]): string {
+  const normalized = normalizeContent(content)
+  // Use first 200 chars for short key (handles truncation)
+  const shortContent = normalized.substring(0, 200)
+  const hash = hashContent(shortContent)
+
+  return `v3short:${hash}:${shortContent.length}`
 }
 
 /**
@@ -144,6 +186,7 @@ function cleanupMemoryCache(): void {
 /**
  * Cache a thinking block for an assistant message.
  * Stores in both memory cache (fast) and Redis (persistent).
+ * Uses both full key and short key for better hit rate.
  */
 export async function cacheThinkingBlock(
   assistantContent: ContentBlock[],
@@ -160,34 +203,43 @@ export async function cacheThinkingBlock(
   }
 
   const key = generateCacheKey(nonThinkingContent)
+  const shortKey = generateShortKey(nonThinkingContent)
   const thinkingLen = thinkingBlock.thinking?.length || 0
   const sigLen = thinkingBlock.signature?.length || 0
 
   debugLog(`Caching thinking block: ${thinkingLen} chars, signature: ${sigLen} chars`)
+  debugLog(`Keys: full=${key}, short=${shortKey}`)
 
   const cacheData: CachedThinkingBlock = {
     thinkingBlock,
     timestamp: Date.now(),
   }
 
-  // Store in memory cache
+  // Store in memory cache (both keys)
   cleanupMemoryCache()
   memoryCache.set(key, cacheData)
+  memoryCache.set(shortKey, cacheData)
 
   // Store in Redis (persistent)
   const redis = getRedis()
   if (redis) {
     try {
-      await redis.set(`${CACHE_KEY_PREFIX}${key}`, JSON.stringify(cacheData), {
-        ex: CACHE_TTL_SECONDS,
-      })
-      console.log(`[ThinkingCache] ✓ Cached thinking block (${thinkingLen} chars)`)
+      // Store with both keys for fallback matching
+      await Promise.all([
+        redis.set(`${CACHE_KEY_PREFIX}${key}`, JSON.stringify(cacheData), {
+          ex: CACHE_TTL_SECONDS,
+        }),
+        redis.set(`${CACHE_KEY_PREFIX}${shortKey}`, JSON.stringify(cacheData), {
+          ex: CACHE_TTL_SECONDS,
+        }),
+      ])
+      console.log(`[ThinkingCache] Cached thinking block (${thinkingLen} chars)`)
     } catch (error) {
       console.error('[ThinkingCache] Redis write failed:', error)
     }
   } else {
     // Memory-only mode
-    console.log(`[ThinkingCache] ✓ Cached in memory (${thinkingLen} chars) - no Redis configured`)
+    console.log(`[ThinkingCache] Cached in memory (${thinkingLen} chars) - no Redis configured`)
   }
 }
 
@@ -208,16 +260,20 @@ export function cacheThinkingBlockSync(
 /**
  * Look up a cached thinking block for an assistant message.
  * Checks memory cache first (fast), then Redis (persistent).
+ * Uses fallback to short key if full key misses.
  */
 export async function getCachedThinkingBlock(
   content: string | ContentBlock[],
 ): Promise<ContentBlock | null> {
   const key = generateCacheKey(content)
+  const shortKey = generateShortKey(content)
 
-  // Check memory cache first (fast path)
-  const memoryCached = memoryCache.get(key)
+  debugLog(`Looking up keys: full=${key}, short=${shortKey}`)
+
+  // Check memory cache first (fast path) - try both keys
+  const memoryCached = memoryCache.get(key) || memoryCache.get(shortKey)
   if (memoryCached) {
-    console.log('[ThinkingCache] ✓ HIT (memory)')
+    console.log('[ThinkingCache] HIT (memory)')
     return memoryCached.thinkingBlock
   }
 
@@ -225,14 +281,23 @@ export async function getCachedThinkingBlock(
   const redis = getRedis()
   if (redis) {
     try {
-      const cached = await redis.get<string>(`${CACHE_KEY_PREFIX}${key}`)
+      // Try full key first, then short key as fallback
+      let cached = await redis.get<string>(`${CACHE_KEY_PREFIX}${key}`)
+      let hitType = 'full key'
+
+      if (!cached) {
+        cached = await redis.get<string>(`${CACHE_KEY_PREFIX}${shortKey}`)
+        hitType = 'short key'
+      }
+
       if (cached) {
         const parsed =
           typeof cached === 'string' ? (JSON.parse(cached) as CachedThinkingBlock) : null
         if (parsed?.thinkingBlock) {
           // Store in memory cache for faster subsequent access
           memoryCache.set(key, parsed)
-          console.log('[ThinkingCache] ✓ HIT (Redis)')
+          memoryCache.set(shortKey, parsed)
+          console.log(`[ThinkingCache] HIT (Redis, ${hitType})`)
           return parsed.thinkingBlock
         }
       }
@@ -242,7 +307,7 @@ export async function getCachedThinkingBlock(
   }
 
   // Cache miss
-  console.log('[ThinkingCache] ✗ MISS (thinking will be disabled for this turn)')
+  console.log('[ThinkingCache] MISS (thinking will be disabled for this turn)')
   return null
 }
 

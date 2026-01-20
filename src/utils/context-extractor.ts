@@ -330,12 +330,12 @@ export function extractUsage(response: {
 export function formatContextLog(context: ContextSummary): string {
   const lines: string[] = []
 
-  lines.push(`📊 Context Summary:`)
+  lines.push(`[CONTEXT] Summary:`)
   lines.push(`   Messages: ${context.messageCount} | Tools: ${context.toolCount}`)
   lines.push(`   Estimated tokens: ~${context.estimatedTokens.total.toLocaleString()} (system: ${context.estimatedTokens.system.toLocaleString()}, messages: ${context.estimatedTokens.messages.toLocaleString()})`)
 
   if (context.files.length > 0) {
-    lines.push(`   📁 Files referenced (${context.files.length}):`)
+    lines.push(`   Files referenced (${context.files.length}):`)
     // Show first 10 files
     const displayFiles = context.files.slice(0, 10)
     for (const file of displayFiles) {
@@ -405,7 +405,7 @@ export function getContextWindowSize(model: string): number {
 export function formatUsageLog(usage: UsageInfo, model?: string): string {
   const lines: string[] = []
 
-  lines.push(`📈 Token Usage:`)
+  lines.push(`[USAGE] Token Usage:`)
   lines.push(`   Input: ${usage.inputTokens.toLocaleString()} | Output: ${usage.outputTokens.toLocaleString()} | Total: ${usage.totalTokens.toLocaleString()}`)
 
   // Show context window usage percentage
@@ -413,11 +413,11 @@ export function formatUsageLog(usage: UsageInfo, model?: string): string {
     const contextWindow = getContextWindowSize(model)
     const usagePercent = ((usage.inputTokens / contextWindow) * 100).toFixed(1)
     lines.push(`   Context Window: ${usagePercent}% used (${usage.inputTokens.toLocaleString()} / ${contextWindow.toLocaleString()})`)
-    
+
     if (parseFloat(usagePercent) > 75) {
-      lines.push(`   ⚠️  Warning: >75% context used - consider using /summarize`)
+      lines.push(`   [WARN] >75% context used - consider using /summarize`)
     } else if (parseFloat(usagePercent) > 50) {
-      lines.push(`   ℹ️  Note: >50% context used`)
+      lines.push(`   [INFO] >50% context used`)
     }
   }
 

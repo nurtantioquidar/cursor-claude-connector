@@ -48,7 +48,7 @@ async function startAuthFlow(): Promise<TokenResponse> {
   const pkce = generatePKCE()
   const authUrl = getAuthorizationUrl(pkce)
 
-  console.log('\n🔐 OAuth Authentication Required')
+  console.log('\n[AUTH] OAuth Authentication Required')
   console.log('Please visit the following URL to authenticate:')
   console.log(`\n${authUrl}\n`)
   console.log('After authentication, you will get a code.')
@@ -117,7 +117,7 @@ export async function exchangeCodeForTokens(
     expires: Date.now() + data.expires_in * 1000,
   })
 
-  console.log('✅ OAuth tokens saved successfully!')
+  console.log('[AUTH] OAuth tokens saved successfully')
 
   return data
 }
@@ -154,7 +154,7 @@ export async function login(): Promise<boolean> {
     // Check if we already have valid credentials
     const existing = await authManager.get()
     if (existing && existing.access && existing.expires > Date.now()) {
-      console.log('✅ Valid OAuth credentials already exist')
+      console.log('[AUTH] Valid OAuth credentials already exist')
       return true
     }
 
@@ -170,7 +170,7 @@ export async function login(): Promise<boolean> {
 export async function logout(): Promise<boolean> {
   try {
     await authManager.remove()
-    console.log('✅ OAuth credentials removed')
+    console.log('[AUTH] OAuth credentials removed')
     return true
   } catch (error) {
     console.error('Logout failed:', error)

@@ -110,10 +110,10 @@ export function getStorage(): Storage {
     const token = process.env.UPSTASH_REDIS_REST_TOKEN
 
     if (url && token && url !== 'https://your-redis-instance.upstash.io' && token !== 'your-redis-rest-token') {
-        console.log('✅ Using Upstash Redis for storage')
+        console.log('[STORAGE] Using Upstash Redis for storage')
         return new RedisStorage(url, token)
     }
 
-    console.log('⚠️ Using local file storage for auth data (fallback)')
+    console.log('[STORAGE] Using local file storage for auth data (fallback)')
     return new FileStorage()
 }

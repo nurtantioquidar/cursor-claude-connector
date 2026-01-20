@@ -15,7 +15,7 @@ import {
   createConverterState,
   processChunk,
   convertNonStreamingResponse,
-  getThinkingBlockFromState,
+  getThinkingBlocksFromState,
   getAccumulatedText,
   getUsageFromState,
 } from './utils/anthropic-to-openai-converter'
@@ -203,7 +203,7 @@ app.get('/v1', (c) => {
 
 // Global logger to see every single hit to the server
 app.use('*', async (c, next) => {
-  console.log(`🌐 [CONNECTION] ${c.req.method} ${c.req.path}`)
+  console.log(`[CONNECTION] ${c.req.method} ${c.req.path}`)
   await next()
 })
 
@@ -335,7 +335,7 @@ const resolveModelVariant = (model: string): ModelVariantConfig & { originalMode
       baseModel = 'claude-haiku-4-5'
     }
     
-    console.log(`🔍 [MODEL] Detected thinking variant: ${model} -> ${baseModel} with thinking`)
+    console.log(`[MODEL] Detected thinking variant: ${model} -> ${baseModel} with thinking`)
     return {
       model: baseModel,
       maxTokens: 64000,
@@ -375,11 +375,11 @@ const messagesFn = async (c: Context) => {
 
   const isStreaming = body.stream === true
 
-  console.log(`\n📥 [REQUEST] ${c.req.method} ${c.req.path}`)
-  console.log(`🤖 Model: ${originalModel}${originalModel !== body.model ? ` -> ${body.model}` : ''}`)
-  console.log(`📡 Streaming: ${isStreaming}`)
+  console.log(`\n[REQUEST] ${c.req.method} ${c.req.path}`)
+  console.log(`[MODEL] ${originalModel}${originalModel !== body.model ? ` -> ${body.model}` : ''}`)
+  console.log(`[STREAMING] ${isStreaming}`)
   if (variant.thinking) {
-    console.log(`🧠 Thinking: enabled, budget_tokens=${variant.thinking.budget_tokens}`)
+    console.log(`[THINKING] enabled, budget_tokens=${variant.thinking.budget_tokens}`)
   }
 
   // Extract and log context information from Cursor request
@@ -398,7 +398,7 @@ const messagesFn = async (c: Context) => {
   //     apiKey === 'dummy'
 
   //   if (!isAcceptedKey) {
-  //     console.log(`⚠️ Warning: Non-standard Key mismatch (Received: ${apiKey.substring(0, 8)}...), but proceeding to OAuth check.`)
+  //     console.log(`[WARN] Non-standard Key mismatch (Received: ${apiKey.substring(0, 8)}...), but proceeding to OAuth check.`)
   //   }
   // }
 
@@ -421,7 +421,7 @@ const messagesFn = async (c: Context) => {
     body.model.toLowerCase().includes('haiku')
 
   if (!isClaudeModel && !isCursorKeyCheck(body)) {
-    console.log(`🚫 [SELECTIVE 404] Model ${body.model} not handled by proxy. Forcing Cursor internal fallback.`)
+    console.log(`[SELECTIVE 404] Model ${body.model} not handled by proxy. Forcing Cursor internal fallback.`)
     return c.json(
       {
         error: {
@@ -576,13 +576,13 @@ const messagesFn = async (c: Context) => {
       const injectResult: InjectResult = await injectCachedThinkingBlocks(messagesWithThinking)
       
       if (injectResult.injectedCount > 0) {
-        console.log(`🧠 [THINKING] Injected ${injectResult.injectedCount} cached thinking block(s)`)
+        console.log(`[THINKING] Injected ${injectResult.injectedCount} cached thinking block(s)`)
       }
       
       // If we couldn't restore all thinking blocks, we must disable thinking
       // Anthropic requires ALL assistant messages to have thinking blocks when thinking is enabled
       if (variant.thinking && !injectResult.canUseThinking) {
-        console.log(`⚠️ [THINKING] Disabling thinking - missing ${injectResult.missingCount} cached block(s)`)
+        console.log(`[THINKING] Disabling thinking - missing ${injectResult.missingCount} cached block(s)`)
         delete anthropicBody.thinking
         anthropicBody.temperature = body.temperature // Restore original temperature
         thinkingEnabled = false
@@ -596,7 +596,7 @@ const messagesFn = async (c: Context) => {
       }
     }
 
-    console.log(`📤 [FORWARD] Sending to Anthropic: ${anthropicBody.model}${thinkingEnabled ? ' (thinking enabled)' : ''}`)
+    console.log(`[FORWARD] Sending to Anthropic: ${anthropicBody.model}${thinkingEnabled ? ' (thinking enabled)' : ''}`)
 
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -653,7 +653,7 @@ const messagesFn = async (c: Context) => {
 
             if (transformToOpenAIFormat) {
               if (enableLogging) {
-                console.log('🔄 [TRANSFORM MODE] Converting to OpenAI format')
+                console.log('[TRANSFORM] Converting to OpenAI format')
               }
 
               const results = processChunk(converterState, chunk, enableLogging)
@@ -662,7 +662,7 @@ const messagesFn = async (c: Context) => {
                 if (result.type === 'chunk') {
                   const dataToSend = `data: ${JSON.stringify(result.data)}\n\n`
                   if (enableLogging) {
-                    console.log('✅ [SENDING] OpenAI Chunk:', dataToSend)
+                    console.log('[SENDING] OpenAI Chunk:', dataToSend)
                   }
                   await stream.write(dataToSend)
                 } else if (result.type === 'done') {
@@ -674,15 +674,19 @@ const messagesFn = async (c: Context) => {
             }
           }
 
-          // Cache thinking block for future multi-turn conversations
-          const thinkingBlock = getThinkingBlockFromState(converterState)
+          // Cache all thinking blocks for future multi-turn conversations
+          const thinkingBlocks = getThinkingBlocksFromState(converterState)
           const accumulatedText = getAccumulatedText(converterState)
-          if (thinkingBlock && accumulatedText) {
+          if (thinkingBlocks.length > 0 && accumulatedText) {
+            // Build content blocks with all thinking blocks followed by text
             const contentBlocks: ContentBlock[] = [
-              thinkingBlock,
+              ...thinkingBlocks,
               { type: 'text', text: accumulatedText },
             ]
-            cacheThinkingBlockSync(contentBlocks, thinkingBlock)
+            // Cache each thinking block individually for better lookup
+            for (const thinkingBlock of thinkingBlocks) {
+              cacheThinkingBlockSync(contentBlocks, thinkingBlock)
+            }
           }
 
           // Log token usage from streaming response
@@ -768,7 +772,7 @@ export default app
 
 // Server is started differently for local development vs Vercel
 if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
-  console.log(`🚀 Server is running on http://localhost:${port}`)
+  console.log(`Server is running on http://localhost:${port}`)
   serve({
     fetch: app.fetch,
     port: Number(port),

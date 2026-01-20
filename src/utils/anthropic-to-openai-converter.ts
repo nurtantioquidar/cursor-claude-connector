@@ -161,10 +161,13 @@ export interface ConverterState {
   toolCallsTracker: Map<number, ToolCallTracker>
   metricsData: MetricsData
   lineBuffer: string
-  // Thinking block tracking for cache
-  thinkingBlock: ThinkingBlockData | null
+  // Thinking block tracking for cache - supports multiple interleaved blocks
+  thinkingBlocks: ThinkingBlockData[]
+  currentThinkingBlock: ThinkingBlockData | null
   accumulatedText: string
   inThinkingBlock: boolean
+  // Track content block index for proper ordering
+  currentBlockIndex: number
 }
 
 // Create initial converter state
@@ -182,29 +185,45 @@ export function createConverterState(): ConverterState {
       openAIId: null,
     },
     lineBuffer: '',
-    thinkingBlock: null,
+    thinkingBlocks: [],
+    currentThinkingBlock: null,
     accumulatedText: '',
     inThinkingBlock: false,
+    currentBlockIndex: -1,
   }
 }
 
 /**
- * Get the captured thinking block from the converter state.
+ * Get all captured thinking blocks from the converter state.
+ * Returns an array of thinking blocks (may be empty).
+ * For interleaved thinking, there can be multiple blocks per response.
+ */
+export function getThinkingBlocksFromState(state: ConverterState): Array<{
+  type: 'thinking'
+  thinking: string
+  signature: string
+}> {
+  return state.thinkingBlocks
+    .filter(block => block.thinking || block.signature)
+    .map(block => ({
+      type: 'thinking' as const,
+      thinking: block.thinking,
+      signature: block.signature,
+    }))
+}
+
+/**
+ * Get the first captured thinking block from the converter state.
  * Returns null if no thinking block was captured.
+ * @deprecated Use getThinkingBlocksFromState for interleaved thinking support
  */
 export function getThinkingBlockFromState(state: ConverterState): {
   type: 'thinking'
   thinking: string
   signature: string
 } | null {
-  if (state.thinkingBlock && (state.thinkingBlock.thinking || state.thinkingBlock.signature)) {
-    return {
-      type: 'thinking',
-      thinking: state.thinkingBlock.thinking,
-      signature: state.thinkingBlock.signature,
-    }
-  }
-  return null
+  const blocks = getThinkingBlocksFromState(state)
+  return blocks.length > 0 ? blocks[0] : null
 }
 
 /**
@@ -381,13 +400,14 @@ export function processChunk(
           continue
         }
 
-        // Handle thinking block start
+        // Handle thinking block start - supports multiple interleaved blocks
         if (
           data.type === 'content_block_start' &&
           (data.content_block?.type === 'thinking' || data.content_block?.type === 'redacted_thinking')
         ) {
           state.inThinkingBlock = true
-          state.thinkingBlock = {
+          state.currentBlockIndex = data.index ?? state.currentBlockIndex + 1
+          state.currentThinkingBlock = {
             thinking: data.content_block.thinking || '',
             signature: data.content_block.signature || '',
           }
@@ -396,24 +416,30 @@ export function processChunk(
 
         // Handle thinking_delta events
         if (data.type === 'content_block_delta' && data.delta?.thinking) {
-          if (state.thinkingBlock) {
-            state.thinkingBlock.thinking += data.delta.thinking
+          if (state.currentThinkingBlock) {
+            state.currentThinkingBlock.thinking += data.delta.thinking
           }
           continue
         }
 
         // Handle signature_delta events
         if (data.type === 'content_block_delta' && data.delta?.signature) {
-          if (state.thinkingBlock) {
-            state.thinkingBlock.signature += data.delta.signature
+          if (state.currentThinkingBlock) {
+            state.currentThinkingBlock.signature += data.delta.signature
           }
           continue
         }
 
-        // Handle content_block_stop - capture signature if present
+        // Handle content_block_stop - finalize and store the thinking block
         if (data.type === 'content_block_stop') {
-          if (state.inThinkingBlock && data.signature && state.thinkingBlock) {
-            state.thinkingBlock.signature = data.signature
+          if (state.inThinkingBlock && state.currentThinkingBlock) {
+            // Capture signature from stop event if present
+            if (data.signature) {
+              state.currentThinkingBlock.signature = data.signature
+            }
+            // Store completed thinking block
+            state.thinkingBlocks.push(state.currentThinkingBlock)
+            state.currentThinkingBlock = null
           }
           state.inThinkingBlock = false
           continue
@@ -620,7 +646,7 @@ function transformToOpenAI(
   ) {
     // Start of tool call - store the tool info for tracking
     if (enableLogging) {
-      console.log('🔧 [ANTHROPIC] Tool Start:', {
+      console.log('[ANTHROPIC] Tool Start:', {
         type: data.type,
         index: data.index,
         id: data.content_block.id,
@@ -662,14 +688,14 @@ function transformToOpenAI(
 
     if (enableLogging) {
       console.log(
-        '📤 [OPENAI] Tool Start Chunk:',
+        '[OPENAI] Tool Start Chunk:',
         JSON.stringify(openAIChunk, null, 2),
       )
     }
   } else if (data.type === 'content_block_delta' && data.delta?.partial_json) {
     // Tool call arguments - OpenAI expects incremental string chunks
     if (enableLogging) {
-      console.log('🔨 [ANTHROPIC] Tool Arguments Delta:', {
+      console.log('[ANTHROPIC] Tool Arguments Delta:', {
         index: data.index,
         partial_json: data.delta.partial_json,
       })
@@ -695,7 +721,7 @@ function transformToOpenAI(
       }
 
       if (enableLogging) {
-        console.log('📊 [DELTA] Calculation:', {
+        console.log('[DELTA] Calculation:', {
           index: data.index,
           partial_json: data.delta.partial_json,
           accumulated: toolCall.arguments,
@@ -728,7 +754,7 @@ function transformToOpenAI(
 
       if (enableLogging) {
         console.log(
-          '📤 [OPENAI] Tool Arguments Chunk:',
+          '[OPENAI] Tool Arguments Chunk:',
           JSON.stringify(openAIChunk, null, 2),
         )
       }
