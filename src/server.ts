@@ -317,7 +317,7 @@ const MODEL_VARIANTS: Record<string, ModelVariantConfig> = {
 
 const resolveModelVariant = (model: string): ModelVariantConfig & { originalModel: string } => {
   const normalizedModel = model.toLowerCase().trim()
-  
+
   // Check if it's a known Cursor variant (case-insensitive)
   for (const [key, config] of Object.entries(MODEL_VARIANTS)) {
     if (key.toLowerCase() === normalizedModel) {
@@ -326,6 +326,7 @@ const resolveModelVariant = (model: string): ModelVariantConfig & { originalMode
   }
 
   // Check if model name contains 'thinking' - enable thinking for any thinking variant
+  // Cursor convention: only models with -thinking suffix have thinking enabled
   if (normalizedModel.includes('thinking')) {
     // Determine base model
     let baseModel = 'claude-sonnet-4-5' // default
@@ -334,7 +335,7 @@ const resolveModelVariant = (model: string): ModelVariantConfig & { originalMode
     } else if (normalizedModel.includes('haiku')) {
       baseModel = 'claude-haiku-4-5'
     }
-    
+
     console.log(`[MODEL] Detected thinking variant: ${model} -> ${baseModel} with thinking`)
     return {
       model: baseModel,
