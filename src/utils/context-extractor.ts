@@ -368,6 +368,7 @@ export function formatContextLog(context: ContextSummary): string {
 
 // Context window sizes for Claude models (tokens)
 const CONTEXT_WINDOW_SIZES: Record<string, number> = {
+  'claude-opus-4-6': 200000,
   'claude-opus-4-5': 200000,
   'claude-sonnet-4-5': 200000,
   'claude-haiku-4-5': 200000,

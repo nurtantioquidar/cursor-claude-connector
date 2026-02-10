@@ -201,7 +201,7 @@ The proxy implements a **Thinking Cache** that:
 ### Using Thinking-Enabled Models
 
 To use Extended Thinking in Cursor:
-1. Select a thinking-enabled model (e.g., `claude-opus-4-5` with thinking)
+1. Select a thinking-enabled model (e.g., `claude-opus-4-6` with thinking)
 2. The proxy automatically handles thinking block caching
 3. Multi-turn conversations maintain thinking context
 

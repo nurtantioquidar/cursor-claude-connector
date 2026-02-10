@@ -209,6 +209,10 @@ app.use('*', async (c, next) => {
 
 app.get('/v1/models', async (c: Context) => {
   const fallbackModels: ModelInfo[] = [
+    // Claude 4.6 Opus variants (adaptive thinking)
+    { id: 'claude-4.6-opus-high', object: 'model', created: 1738742400, owned_by: 'anthropic' },
+    { id: 'claude-4.6-opus-high-thinking', object: 'model', created: 1738742400, owned_by: 'anthropic' },
+    { id: 'claude-opus-4-6', object: 'model', created: 1738742400, owned_by: 'anthropic' },
     // Claude 4.5 variants with thinking support
     { id: 'claude-4.5-opus-high', object: 'model', created: 1730000000, owned_by: 'anthropic' },
     { id: 'claude-4.5-opus-high-thinking', object: 'model', created: 1730000000, owned_by: 'anthropic' },
@@ -281,21 +285,35 @@ app.get('/v1/models', async (c: Context) => {
 
 // Model variant configurations for Cursor
 // Maps Cursor model names to Anthropic API parameters
+type ThinkingConfig = { type: 'enabled'; budget_tokens: number } | { type: 'adaptive' }
 interface ModelVariantConfig {
   model: string
   maxTokens: number
-  thinking: { type: 'enabled'; budget_tokens: number } | null
+  thinking: ThinkingConfig | null
 }
 
-// Thinking configuration for models
-const THINKING_CONFIG = { type: 'enabled' as const, budget_tokens: 32000 }
+// Thinking configuration for 4.5 models (enabled mode with budget)
+const THINKING_CONFIG_4_5 = { type: 'enabled' as const, budget_tokens: 32000 }
+// Thinking configuration for 4.6 Opus (adaptive mode, recommended)
+const THINKING_CONFIG_4_6 = { type: 'adaptive' as const }
 
 const MODEL_VARIANTS: Record<string, ModelVariantConfig> = {
+  // Claude 4.6 Opus variants (adaptive thinking)
+  'claude-4.6-opus-high-thinking': {
+    model: 'claude-opus-4-6',
+    maxTokens: 128000,
+    thinking: THINKING_CONFIG_4_6,
+  },
+  'claude-4.6-opus-high': {
+    model: 'claude-opus-4-6',
+    maxTokens: 32000,
+    thinking: null,
+  },
   // Claude 4.5 Opus variants
   'claude-4.5-opus-high-thinking': {
     model: 'claude-opus-4-5',
     maxTokens: 64000,
-    thinking: THINKING_CONFIG,
+    thinking: THINKING_CONFIG_4_5,
   },
   'claude-4.5-opus-high': {
     model: 'claude-opus-4-5',
@@ -306,7 +324,7 @@ const MODEL_VARIANTS: Record<string, ModelVariantConfig> = {
   'claude-4.5-sonnet-high-thinking': {
     model: 'claude-sonnet-4-5',
     maxTokens: 64000,
-    thinking: THINKING_CONFIG,
+    thinking: THINKING_CONFIG_4_5,
   },
   'claude-4.5-sonnet-high': {
     model: 'claude-sonnet-4-5',
@@ -328,10 +346,19 @@ const resolveModelVariant = (model: string): ModelVariantConfig & { originalMode
   // Check if model name contains 'thinking' - enable thinking for any thinking variant
   // Cursor convention: only models with -thinking suffix have thinking enabled
   if (normalizedModel.includes('thinking')) {
-    // Determine base model
+    const isOpus46 = normalizedModel.includes('4.6') || normalizedModel.includes('4-6')
     let baseModel = 'claude-sonnet-4-5' // default
+    let thinking: ThinkingConfig = THINKING_CONFIG_4_5
+    let maxTokens = 64000
+
     if (normalizedModel.includes('opus')) {
-      baseModel = 'claude-opus-4-5'
+      if (isOpus46) {
+        baseModel = 'claude-opus-4-6'
+        thinking = THINKING_CONFIG_4_6
+        maxTokens = 128000
+      } else {
+        baseModel = 'claude-opus-4-5'
+      }
     } else if (normalizedModel.includes('haiku')) {
       baseModel = 'claude-haiku-4-5'
     }
@@ -339,8 +366,8 @@ const resolveModelVariant = (model: string): ModelVariantConfig & { originalMode
     console.log(`[MODEL] Detected thinking variant: ${model} -> ${baseModel} with thinking`)
     return {
       model: baseModel,
-      maxTokens: 64000,
-      thinking: THINKING_CONFIG,
+      maxTokens,
+      thinking,
       originalModel: model,
     }
   }
@@ -380,7 +407,8 @@ const messagesFn = async (c: Context) => {
   console.log(`[MODEL] ${originalModel}${originalModel !== body.model ? ` -> ${body.model}` : ''}`)
   console.log(`[STREAMING] ${isStreaming}`)
   if (variant.thinking) {
-    console.log(`[THINKING] enabled, budget_tokens=${variant.thinking.budget_tokens}`)
+    const mode = variant.thinking.type === 'adaptive' ? 'adaptive' : `enabled (budget_tokens=${variant.thinking.budget_tokens})`
+    console.log(`[THINKING] ${mode}`)
   }
 
   // Extract and log context information from Cursor request
@@ -525,9 +553,11 @@ const messagesFn = async (c: Context) => {
       )
     }
 
-    // Build anthropic-beta header - add interleaved-thinking when thinking is enabled
+    // Build anthropic-beta header - add interleaved-thinking for 4.5 enabled mode only
+    // Opus 4.6 adaptive thinking auto-enables interleaved thinking; header deprecated for 4.6
     const betaFeatures = ['oauth-2025-04-20', 'fine-grained-tool-streaming-2025-05-14', 'prompt-caching-2024-07-31']
-    if (variant.thinking) {
+    const needsInterleavedHeader = variant.thinking?.type === 'enabled'
+    if (needsInterleavedHeader) {
       betaFeatures.push('interleaved-thinking-2025-05-14')
     }
 
@@ -561,8 +591,10 @@ const messagesFn = async (c: Context) => {
     // Add thinking parameter if enabled for this model variant
     if (variant.thinking) {
       anthropicBody.thinking = variant.thinking
-      // Note: temperature must be 1 when thinking is enabled (Anthropic requirement)
-      anthropicBody.temperature = 1
+      // Temperature must be 1 for enabled mode (Anthropic requirement); adaptive has no such constraint
+      if (variant.thinking.type === 'enabled') {
+        anthropicBody.temperature = 1
+      }
     }
 
     // Remove undefined fields
@@ -588,14 +620,16 @@ const messagesFn = async (c: Context) => {
         console.log(`[THINKING] Injected ${injectResult.injectedCount} cached thinking block(s)`)
       }
       
-      // If we couldn't restore all thinking blocks, we must disable thinking
-      // Anthropic requires ALL assistant messages to have thinking blocks when thinking is enabled
-      if (variant.thinking && !injectResult.canUseThinking) {
+      // If we couldn't restore all thinking blocks, disable thinking for enabled mode
+      // Anthropic requires ALL assistant messages to have thinking blocks when using enabled mode
+      // Adaptive thinking (Opus 4.6) is more flexible - previous turns don't need thinking blocks
+      const mustDisableOnCacheMiss = variant.thinking?.type === 'enabled'
+      if (variant.thinking && mustDisableOnCacheMiss && !injectResult.canUseThinking) {
         console.log(`[THINKING] Disabling thinking - missing ${injectResult.missingCount} cached block(s)`)
         delete anthropicBody.thinking
         anthropicBody.temperature = body.temperature // Restore original temperature
         thinkingEnabled = false
-        
+
         // Remove interleaved-thinking from beta headers
         const currentBeta = headers['anthropic-beta'] || ''
         headers['anthropic-beta'] = currentBeta
